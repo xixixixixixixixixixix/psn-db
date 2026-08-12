@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-PSN Username Database — generator
+ALIAS — Handle Catalogue generator
 Builds a self-contained index.html with an embedded, scored username database.
+Platforms: PlayStation live; Steam / Xbox / Discord / Twitch stubbed in the picker.
 
 Run:  python3 build.py
 Output: index.html (open in any browser, no server needed)
@@ -529,7 +530,7 @@ TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PSN Username Database</title>
+<title>ALIAS — Handle Catalogue</title>
 <style>
 :root{
   --panel:rgba(15,19,15,.78); --panel2:rgba(22,27,21,.66); --border:rgba(216,212,196,.16); --ink:#e9e6d9;
@@ -550,7 +551,14 @@ header h1 .ps{background:var(--accent);color:#0d110d;border-radius:2px;padding:2
 header p{color:#a9a69a;font-size:12.5px;margin-top:8px;max-width:920px}
 header p b{color:var(--ink)}
 header p code{color:var(--accent)}
-.stats{display:flex;gap:0;flex-wrap:wrap;margin-top:14px;border:1px solid rgba(233,230,217,.24);border-radius:3px;overflow:hidden;background:var(--panel);backdrop-filter:blur(8px);width:fit-content;max-width:100%}
+.plats{display:flex;gap:6px;flex-wrap:wrap;margin-top:14px}
+.plat{border:1.5px solid rgba(233,230,217,.28);background:var(--panel);color:var(--muted);border-radius:3px;padding:6px 12px;font-size:11px;cursor:pointer;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.plat:hover{border-color:rgba(233,230,217,.55);color:var(--ink)}
+.plat.on{background:var(--ink);color:#14150e;border-color:var(--ink)}
+.plat.soon{opacity:.42;cursor:not-allowed}
+.plat.soon:hover{border-color:rgba(233,230,217,.28);color:var(--muted)}
+.plat .soonlbl{font-size:8px;letter-spacing:.14em;margin-left:6px;font-weight:700;opacity:.8}
+.stats{display:flex;gap:0;flex-wrap:wrap;margin-top:12px;border:1px solid rgba(233,230,217,.24);border-radius:3px;overflow:hidden;background:var(--panel);backdrop-filter:blur(8px);width:fit-content;max-width:100%}
 .stat{border-right:1px solid var(--border);padding:7px 13px;font-size:10.5px;color:var(--muted);display:flex;gap:7px;align-items:baseline;text-transform:uppercase;letter-spacing:.08em}
 .stat:last-child{border-right:0}
 .stat b{color:var(--ink);font-size:15px;font-weight:800;letter-spacing:0}
@@ -633,20 +641,17 @@ footer li{margin:3px 0 3px 18px}
 </head>
 <body>
 <header>
-  <div class="kicker">Checked live against Sony's own endpoint · scanning continuously</div>
-  <h1><span class="ps">PSN</span> Username Database</h1>
-  <p>A Spell-style catalogue of PSN Online ID candidates — browse, search and filter every handle, each scored with a 0–99 rarity rating.
-     Availability is checked against <b>Sony's own account endpoint</b>; verified entries carry a <b>✓ live</b> tag, everything else is <b>Unknown</b>
-     until the background scan reaches it. <b>Search any valid ID</b> — if it isn't verified yet, the hosted app (run <code>python3 server.py</code>)
-     checks Sony on the spot and adds it to the database. The list <b>auto-refreshes</b> with new verifications (Sync menu, default 1 min).
-     Catalogue is <b>letters only</b> (plus <span class="mono">_</span>/<span class="mono">-</span>) — no numbers. Any valid 3–16-character ID is still searchable. Word forms are tagged <b>Final</b> (whole word — <span class="mono">lonely</span>) or
-     <b>Semi</b> (stem + prefix/suffix — <span class="mono">loneliness</span>, <span class="mono">replay</span>, <span class="mono">gamer</span>).
-     Verified <b>taken/reserved</b> IDs are removed from this catalogue but stay on record — search one to see its status instantly.</p>
+  <div class="kicker">Handle catalogue · rarity 0–99 · live availability</div>
+  <h1><span class="ps">ALIAS</span> Handle Catalogue</h1>
+  <p>One place to browse, score and verify usernames across platforms.
+     Each handle gets a 0–99 rarity rating. Availability is checked live — verified entries get <b>✓ live</b>, everything else stays <b>Unknown</b> until the scan reaches it.
+     Letters only (plus <span class="mono">_</span>/<span class="mono">-</span>), no numbers. Taken names drop off the list but stay on record.</p>
+  <div class="plats" id="plats"></div>
   <div class="stats" id="stats"></div>
 </header>
 
 <div class="toolbar">
-  <input type="search" id="search" placeholder="Search usernames…  ( / )" autocomplete="off">
+  <input type="search" id="search" placeholder="Search PlayStation IDs…  ( / )" autocomplete="off">
   <select id="sort">
     <option value="score_desc">Sort: Rarity ↓</option>
     <option value="score_asc">Sort: Rarity ↑</option>
@@ -693,7 +698,7 @@ footer li{margin:3px 0 3px 18px}
 </main>
 
 <footer>
-  <div><b>PSN Username Database</b> · generated __GENDATE__ · <span id="ftotal"></span> entries · statuses tagged <b>✓ live</b> were verified against Sony's account endpoint; everything else is Unknown until the background scan reaches it.</div>
+  <div><b>ALIAS</b> · PlayStation · generated __GENDATE__ · <span id="ftotal"></span> entries · statuses tagged <b>✓ live</b> were verified against Sony's account endpoint; everything else is Unknown until the background scan reaches it.</div>
   <details>
     <summary>How rarity scoring works (0–99)</summary>
     <ul>
@@ -1203,7 +1208,26 @@ function setHeadOffset(){
   if(tb) document.documentElement.style.setProperty("--thtop", tb.offsetHeight + "px");
 }
 addEventListener("resize", setHeadOffset);
-rehydrateLive(); buildChips(); render(); setHeadOffset(); setTimeout(setHeadOffset, 300);
+const PLATS = [
+  {id:"psn", label:"PlayStation", live:true},
+  {id:"steam", label:"Steam", live:false},
+  {id:"xbox", label:"Xbox", live:false},
+  {id:"discord", label:"Discord", live:false},
+  {id:"twitch", label:"Twitch", live:false}
+];
+let platform = "psn";
+function buildPlats(){
+  const el = $("plats"); if(!el) return;
+  el.innerHTML = PLATS.map(p =>
+    `<button type="button" class="plat${p.id===platform?" on":""}${p.live?"":" soon"}" data-p="${p.id}">${p.label}${p.live?"":`<span class="soonlbl">soon</span>`}</button>`
+  ).join("");
+  [...el.children].forEach(b => b.onclick = () => {
+    const p = PLATS.find(x => x.id === b.dataset.p);
+    if(!p.live){ toast(p.label + " isn’t wired yet — PlayStation only for now"); return; }
+    platform = p.id; buildPlats();
+  });
+}
+rehydrateLive(); buildPlats(); buildChips(); render(); setHeadOffset(); setTimeout(setHeadOffset, 300);
 const rsel = $("refresh");
 if(rsel){
   const opts = [0, 30000, 60000, 300000];
