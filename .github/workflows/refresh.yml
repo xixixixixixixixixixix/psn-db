@@ -52,10 +52,13 @@ jobs:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
         run: python3 deploy/check_prio.py
 
-      - name: Sweep with proxy fleet (7 min)
+      - name: Sweep PSN (proxies) + Twitch (GQL) for 7 min
         env:
           PSN_INTERVAL: "0.35"
           PSN_WORKERS: "200"
+          TWITCH_INTERVAL: "0.12"
+          TWITCH_WORKERS: "4"
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
         run: timeout 420 python3 -u server.py || true
 
       - name: Rebuild static site + worker bundle
@@ -70,6 +73,7 @@ jobs:
         run: |
           git config user.name "psn-refresh-bot"
           git config user.email "psn-refresh-bot@users.noreply.github.com"
-          git add data/verified_live.json data/proxies.txt data/scan_cursor.txt
+          git add data/verified_live.json data/proxies.txt data/scan_cursor.txt \
+                  data/verified_twitch.json data/twitch_cursor.txt
           git diff --cached --quiet || git commit -m "refresh: $(date -u +%Y-%m-%dT%H:%MZ)"
           git push

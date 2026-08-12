@@ -554,6 +554,14 @@ def main():
     load_cache()
     if SCAN_ON:
         threading.Thread(target=scanner, daemon=True).start()
+        def _twitch():
+            try:
+                sys.path.insert(0, os.path.join(HERE, "deploy"))
+                import twitch_scan
+                twitch_scan.run()
+            except Exception as e:
+                print(f"[twitch] scanner failed to start: {e}", flush=True)
+        threading.Thread(target=_twitch, daemon=True).start()
     httpd = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"PSN DB app server on 0.0.0.0:{PORT} — /api/check /api/updates /api/stats", flush=True)
     httpd.serve_forever()

@@ -72,6 +72,42 @@ def main():
     os.replace(tmp, POOL)
     print(f"pull_kv: {len(keys)} mirror verdicts read, {new} merged into verified pool")
 
+    # Twitch click-verdicts (same KV, different prefix)
+    tkeys, cursor = [], None
+    while True:
+        q = "/keys?prefix=twitch:chk:&limit=1000" + (f"&cursor={cursor}" if cursor else "")
+        d = cget(q)
+        if not d.get("success"):
+            break
+        tkeys += [k["name"] for k in d["result"]]
+        cursor = (d.get("result_info") or {}).get("cursor")
+        if not cursor or len(d["result"]) < 1000:
+            break
+    tpool_path = os.path.join(HERE, "..", "data", "verified_twitch.json")
+    try:
+        tpool = json.load(open(tpool_path))
+    except (OSError, ValueError):
+        tpool = {}
+    tnew = 0
+    for k in tkeys:
+        name = k.split(":", 2)[-1]
+        try:
+            v = json.loads(cget("/values/" + urllib.parse.quote(k), raw=True))
+        except Exception:
+            continue
+        if not isinstance(v, dict) or "a" not in v:
+            continue
+        old = tpool.get(name)
+        if old is None or v.get("ts", 0) > old.get("ts", 0):
+            tpool[name] = {"a": v["a"], "why": v.get("why", "taken"),
+                           "ts": int(v.get("ts", 0)), "n": int(v.get("n", 1))}
+            tnew += 1
+    tmp = tpool_path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(tpool, f)
+    os.replace(tmp, tpool_path)
+    print(f"pull_kv: {len(tkeys)} twitch verdicts, {tnew} merged")
+
 
 if __name__ == "__main__":
     import urllib.parse  # noqa: E402  (kept low-import for Action boot speed)
