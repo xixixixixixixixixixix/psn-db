@@ -1,0 +1,32 @@
+# Drain click-checks the Cloudflare worker cannot complete.
+# Worker writes prio:<name> to KV when Sony 403s CF egress; this job checks
+# those names from GitHub's IP through the proxy fleet and writes chk: back.
+# Public repo = unlimited minutes. 2-min cadence, ~30-60s per run when empty.
+name: psn-prio
+on:
+  schedule:
+    - cron: "*/2 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: psn-prio
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check queued click-names via proxy fleet
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_KV_NAMESPACE_ID: ${{ secrets.CF_KV_NAMESPACE_ID }}
+        run: python3 deploy/check_prio.py

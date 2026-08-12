@@ -952,9 +952,12 @@ function openModal(r){
       render();
     } else if(j && j.error==="cooldown"){
       $("mav").innerHTML = availBadge(r);
-      toast((j.retry_after||60) >= 300
-        ? "Sony blocks this Cloudflare route — queued for the background scan"
-        : `Rate-limited — try again in ~${j.retry_after||60}s`);
+      if(j.queued || (j.retry_after||0) >= 90){
+        toast("Sony blocks Cloudflare — queued. Scanner will answer in ~2 min");
+        pollQueued(r.n);
+      } else {
+        toast(`Rate-limited — try again in ~${j.retry_after||60}s`);
+      }
     } else {
       $("mav").innerHTML = availBadge(r);
       toast("Live check failed — try again shortly");
@@ -1126,6 +1129,27 @@ function rehydrateLive(){
            ALL.push(nr); NAMEIDX.set(name, nr); }
   }
 }
+const _pollers = new Map();
+function pollQueued(name){
+  if(!name || _pollers.has(name)) return;
+  let n = 0;
+  const id = setInterval(async ()=>{
+    n++;
+    if(n > 18){ clearInterval(id); _pollers.delete(name); return; }
+    try{
+      const j = await fetch("/api/check?onlineId=" + encodeURIComponent(name)).then(x=>x.json());
+      if(!(j && j.ok)) return;
+      clearInterval(id); _pollers.delete(name);
+      applyLive(name, j);
+      const r = nameFind(name);
+      const mav = $("mav"); if(mav && r) mav.innerHTML = availBadge(r);
+      const md = $("mdays"); if(md) md.textContent = "just now";
+      toast(j.a===0 ? `“${name}” is AVAILABLE on Sony's endpoint ✓` : `Sony says: ${j.why}`);
+      render();
+    }catch(e){}
+  }, 10000);
+  _pollers.set(name, id);
+}
 async function liveCheck(name){
   if(!LIVE || liveAsked.has(name)) return null;
   liveAsked.add(name);
@@ -1135,10 +1159,12 @@ async function liveCheck(name){
     if(!j.ok){
       liveAsked.delete(name);
       livebar(`<span>${j.error==="cooldown"
-        ? ((j.retry_after||60) >= 300
-            ? `Sony blocks Cloudflare's route from this edge — left Unknown, queued for the background scan.`
+        ? ((j.queued || (j.retry_after||0) >= 90)
+            ? `Sony blocks Cloudflare from this edge — queued for the off-CF scanner (usually under 2 min).`
             : `Rate-limited (~${j.retry_after||60}s) — try another name or wait a moment.`)
-        : `Live check failed (${j.error||("http "+resp.status)}) — try again shortly.`}</span>`);
+        : `Live check failed (${j.error||("http "+resp.status)}) — try again shortly.`}</span>`,
+        !!(j && (j.queued || (j.retry_after||0) >= 90)));
+      if(j && (j.queued || (j.retry_after||0) >= 90)) pollQueued(name);
       return null;
     }
     checkFails = 0; CHECK_OK = true;

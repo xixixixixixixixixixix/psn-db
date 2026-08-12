@@ -88,6 +88,36 @@ async function readSome(reader, chunks, needle, ms, maxBytes = 65536) {
   return td.decode(concatBytes(chunks));
 }
 
+/* ---- Sony POST over a raw TLS socket (no fetch(), so no cf-* headers) ---- */
+async function checkViaDirectSocket(name) {
+  let socket = null;
+  try {
+    socket = connect({ hostname: SONY_HOST, port: 443 }, { secureTransport: "on" });
+    await withTimeout(socket.opened, 6000);
+    const body = JSON.stringify({ onlineId: name, reserveIfAvailable: false });
+    const w = socket.writable.getWriter();
+    await w.write(new TextEncoder().encode(
+      "POST /api/v1/accounts/onlineIds HTTP/1.1\r\n" +
+      "Host: " + SONY_HOST + "\r\n" +
+      "Content-Type: application/json\r\nAccept: application/json\r\n" +
+      "Content-Length: " + body.length + "\r\nConnection: close\r\n\r\n" + body));
+    w.releaseLock();
+    const raw = await readSome(socket.readable.getReader(), [], null, 8000);
+    try { socket.close(); } catch (e) {}
+    const m = raw.match(/^HTTP\/1\.[01] (\d{3})/);
+    if (!m) {
+      lastProxyErrs.push("direct_sock no_http " + raw.slice(0, 50).replace(/[\r\n]+/g, " "));
+      return null;
+    }
+    lastProxyErrs.push("direct_sock status:" + m[1]);
+    return mapSony(+m[1], raw);
+  } catch (e) {
+    lastProxyErrs.push("direct_sock " + String((e && e.message) || e).slice(0, 80));
+    try { socket && socket.close(); } catch (_) {}
+    return null;
+  }
+}
+
 /* ---- Sony POST via one CONNECT proxy over a raw socket ---- */
 async function checkViaProxy(proxyUrl, name) {
   let u;
@@ -172,9 +202,16 @@ async function apiCheck(request, env, ctx) {
   if (limited(request.headers.get("cf-connecting-ip") || "anon"))
     return json(429, { ok: 0, error: "cooldown", retry_after: 60 });
 
-  // 1) direct attempt — CF egress is fingerprinted at Akamai, mostly a dice roll
+  // 1) raw TLS socket first — same CF IP, but no fetch() so no cf-* headers.
   let verdict = null, via = null, lastStatus = 0;
+  lastProxyErrs = [];
   try {
+    const v = await checkViaDirectSocket(name);
+    if (v) { verdict = v; via = "direct_sock"; }
+  } catch (e) { /* fall through */ }
+
+  // 2) fetch() dice-roll — occasionally a warm colo gets through
+  if (!verdict) try {
     const r = await fetch(SONY, {
       method: "POST",
       headers: { "content-type": "application/json", "accept": "application/json" },
@@ -191,7 +228,6 @@ async function apiCheck(request, env, ctx) {
   //    one-shot canary: if a runtime update ever exposes hostname control, this
   //    silently starts working.
   if (!verdict && PROXIES.length) {
-    lastProxyErrs = [];
     const start = Math.floor(Math.random() * PROXIES.length);
     const deadline = Date.now() + 5000;
     for (let i = 0; i < 2 && Date.now() < deadline; i++) {
@@ -203,12 +239,16 @@ async function apiCheck(request, env, ctx) {
   // Not a real Sony timer. CF/Akamai 403s this edge ~90% of the time and the
   // socket-proxy path dies on workerd TLS/SNI. 600s is an advisory: don't
   // hammer a route that will not suddenly start working.
-  if (!verdict)
-    return json(429, { ok: 0, error: "cooldown", retry_after: 600,
-                       reason: "cf_egress",
-                       hint: "Sony blocks Cloudflare's route; queued for background scan",
+  if (!verdict) {
+    if (kv)
+      ctx.waitUntil(kv.put("prio:" + name, String(Math.floor(Date.now() / 1000)),
+        { expirationTtl: 86400 }).catch(() => {}));
+    return json(429, { ok: 0, error: "cooldown", retry_after: 90,
+                       reason: "cf_egress", queued: true,
+                       hint: "Sony blocks Cloudflare's IP; queued for the off-CF scanner (~2 min)",
                        ...(dbg ? { sony_status: lastStatus,
-                                   proxy_errs: lastProxyErrs.slice(0, 4) } : {}) });
+                                   proxy_errs: lastProxyErrs.slice(0, 6) } : {}) });
+  }
 
   const ts = Math.floor(Date.now() / 1000);
   if (kv)

@@ -47,6 +47,11 @@ jobs:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
         run: python3 deploy/pull_kv.py
 
+      - name: Drain click-queue first
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: python3 deploy/check_prio.py
+
       - name: Sweep with proxy fleet (7 min)
         env:
           PSN_INTERVAL: "0.35"
