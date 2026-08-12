@@ -20,7 +20,8 @@ const SONY = "https://accounts.api.playstation.com/api/v1/accounts/onlineIds";
 const SONY_HOST = "accounts.api.playstation.com";
 const VALID = /^[a-z][a-z0-9_-]{2,15}$/;
 const SITE = { answeredTotal: __ANSWERED_TOTAL__, builtAt: __BUILT_AT__ };
-const PROXIES = __PROXIES__; // latency-sorted subset, rotated per request
+const PROXIES = __PROXIES__; // CONNECT canary list
+const FWD_PROXIES = __FWD_PROXIES__; // HTTP forward proxies (do Sony TLS for us)
 const KV_TTL = 7 * 86400;
 let lastProxyErrs = [];      // debug: why the last request's proxies failed
 
@@ -86,6 +87,44 @@ async function readSome(reader, chunks, needle, ms, maxBytes = 65536) {
     }
   }
   return td.decode(concatBytes(chunks));
+}
+
+
+/* ---- Sony POST via an HTTP forward proxy (absolute-URI). The proxy does
+   the TLS to Sony, so we never call startTls — this is the instant path. ---- */
+async function checkViaForwardProxy(proxyUrl, name) {
+  let u;
+  try { u = new URL(proxyUrl.includes("://") ? proxyUrl : "http://" + proxyUrl); }
+  catch (e) { return null; }
+  let socket = null;
+  try {
+    socket = connect(
+      { hostname: u.hostname, port: +(u.port || 80) },
+      { secureTransport: "off" });
+    await withTimeout(socket.opened, 4000);
+    const body = JSON.stringify({ onlineId: name, reserveIfAvailable: false });
+    const w = socket.writable.getWriter();
+    await w.write(new TextEncoder().encode(
+      "POST " + SONY + " HTTP/1.1\r\n" +
+      "Host: " + SONY_HOST + "\r\n" +
+      "Content-Type: application/json\r\nAccept: application/json\r\n" +
+      "Content-Length: " + body.length + "\r\nConnection: close\r\n\r\n" + body));
+    w.releaseLock();
+    const raw = await readSome(socket.readable.getReader(), [], null, 7000);
+    try { socket.close(); } catch (e) {}
+    const m = raw.match(/^HTTP\/1\.[01] (\d{3})/);
+    if (!m) {
+      lastProxyErrs.push(u.hostname + " fwd no_http");
+      return null;
+    }
+    const v = mapSony(+m[1], raw);
+    if (!v) lastProxyErrs.push(u.hostname + " fwd status:" + m[1]);
+    return v;
+  } catch (e) {
+    lastProxyErrs.push(u.hostname + " fwd " + String((e && e.message) || e).slice(0, 50));
+    try { socket && socket.close(); } catch (_) {}
+    return null;
+  }
 }
 
 /* ---- Sony POST over a raw TLS socket (no fetch(), so no cf-* headers) ---- */
@@ -202,39 +241,37 @@ async function apiCheck(request, env, ctx) {
   if (limited(request.headers.get("cf-connecting-ip") || "anon"))
     return json(429, { ok: 0, error: "cooldown", retry_after: 60 });
 
-  // 1) raw TLS socket first — same CF IP, but no fetch() so no cf-* headers.
   let verdict = null, via = null, lastStatus = 0;
   lastProxyErrs = [];
-  try {
-    const v = await checkViaDirectSocket(name);
-    if (v) { verdict = v; via = "direct_sock"; }
-  } catch (e) { /* fall through */ }
 
-  // 2) fetch() dice-roll — occasionally a warm colo gets through
+  // 1) HTTP forward proxies — they terminate TLS to Sony for us. Instant path.
+  if (FWD_PROXIES.length) {
+    const start = Math.floor(Math.random() * FWD_PROXIES.length);
+    const deadline = Date.now() + 9000;
+    for (let i = 0; i < Math.min(5, FWD_PROXIES.length) && Date.now() < deadline; i++) {
+      const v = await checkViaForwardProxy(FWD_PROXIES[(start + i) % FWD_PROXIES.length], name);
+      if (v) { verdict = v; via = "fwd_proxy"; break; }
+    }
+  }
+
+  // 2) raw TLS / fetch() dice-roll — CF IP, usually 403, occasional warm colo
+  if (!verdict) {
+    try {
+      const v = await checkViaDirectSocket(name);
+      if (v) { verdict = v; via = "direct_sock"; }
+    } catch (e) { /* fall through */ }
+  }
   if (!verdict) try {
     const r = await fetch(SONY, {
       method: "POST",
       headers: { "content-type": "application/json", "accept": "application/json" },
       body: JSON.stringify({ onlineId: name, reserveIfAvailable: false }),
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(5000),
     });
     lastStatus = r.status;
     verdict = mapSony(r.status, await r.text());
     if (verdict) via = "direct";
-  } catch (e) { /* fall through to proxies */ }
-
-  // 2) proxy fleet over raw sockets — currently thwarted by workerd (startTls
-  //    validates the cert against the proxy IP; no SNI override yet). Kept as a
-  //    one-shot canary: if a runtime update ever exposes hostname control, this
-  //    silently starts working.
-  if (!verdict && PROXIES.length) {
-    const start = Math.floor(Math.random() * PROXIES.length);
-    const deadline = Date.now() + 5000;
-    for (let i = 0; i < 2 && Date.now() < deadline; i++) {
-      const v = await checkViaProxy(PROXIES[(start + i) % PROXIES.length], name);
-      if (v) { verdict = v; via = "proxy"; break; }
-    }
-  }
+  } catch (e) { /* fall through */ }
 
   // Not a real Sony timer. CF/Akamai 403s this edge ~90% of the time and the
   // socket-proxy path dies on workerd TLS/SNI. 600s is an advisory: don't

@@ -1,0 +1,12 @@
+# HTTP forward proxies that will fetch HTTPS for the client (absolute-URI).
+# The Pages worker uses these for instant click-checks — no startTls needed.
+# Harvested 2026-08-12; re-probe if instant checks start failing.
+95.211.64.139:8889
+204.76.203.9:3128
+181.39.25.196:8118
+144.178.199.118:8443
+95.211.64.139:8888
+152.42.167.241:3128
+112.28.149.152:8443
+95.211.64.139:8887
+143.198.87.117:8888
