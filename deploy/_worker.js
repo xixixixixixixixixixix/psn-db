@@ -200,8 +200,13 @@ async function apiCheck(request, env, ctx) {
     }
   }
 
+  // Not a real Sony timer. CF/Akamai 403s this edge ~90% of the time and the
+  // socket-proxy path dies on workerd TLS/SNI. 600s is an advisory: don't
+  // hammer a route that will not suddenly start working.
   if (!verdict)
     return json(429, { ok: 0, error: "cooldown", retry_after: 600,
+                       reason: "cf_egress",
+                       hint: "Sony blocks Cloudflare's route; queued for background scan",
                        ...(dbg ? { sony_status: lastStatus,
                                    proxy_errs: lastProxyErrs.slice(0, 4) } : {}) });
 

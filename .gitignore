@@ -1,3 +1,9 @@
 deploy/.cf.env
 deploy/.gh.env
+deploy/.cf.env.tmp
+.wrangler/
 deploy/site/
+__pycache__/
+*.pyc
+.DS_Store
+*.tmp

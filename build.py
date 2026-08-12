@@ -951,10 +951,10 @@ function openModal(r){
       toast(j.a===0 ? `“${r.n}” is AVAILABLE on Sony's endpoint ✓` : `Sony says: ${lbl}`);
       render();
     } else if(j && j.error==="cooldown"){
-      const secs = j.retry_after||60;
-      $("mav").innerHTML = `<span class="badge b-unknown"><span class="dot"></span>PACED ~${secs}s</span>`;
-      $("mdays").textContent = secs>=300 ? "Sony is refusing this host's checks right now" : `retry in ~${secs}s`;
-      toast(secs>=300 ? "Sony blocks this mirror's server IPs — the scan sweeps will catch it" : `Sony cooldown — try again in ~${secs}s`);
+      $("mav").innerHTML = availBadge(r);
+      toast((j.retry_after||60) >= 300
+        ? "Sony blocks this Cloudflare route — queued for the background scan"
+        : `Rate-limited — try again in ~${j.retry_after||60}s`);
     } else {
       $("mav").innerHTML = availBadge(r);
       toast("Live check failed — try again shortly");
@@ -1135,7 +1135,9 @@ async function liveCheck(name){
     if(!j.ok){
       liveAsked.delete(name);
       livebar(`<span>${j.error==="cooldown"
-        ? `Sony is pacing new checks (~${j.retry_after||60}s) — try again in a moment.`
+        ? ((j.retry_after||60) >= 300
+            ? `Sony blocks Cloudflare's route from this edge — left Unknown, queued for the background scan.`
+            : `Rate-limited (~${j.retry_after||60}s) — try another name or wait a moment.`)
         : `Live check failed (${j.error||("http "+resp.status)}) — try again shortly.`}</span>`);
       return null;
     }

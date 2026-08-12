@@ -33,7 +33,8 @@ tpl = tpl.replace("__ANSWERED_TOTAL__", str(ans))
 tpl = tpl.replace("__BUILT_AT__", str(int(time.time())))
 # bundled proxy fleet for the worker's socket fallback (latency-sorted proxies.txt)
 try:
-    px = [l.strip() for l in open("data/proxies.txt") if l.strip()]
+    px = [l.strip() for l in open("data/proxies.txt")
+          if l.strip() and not l.strip().startswith("#")]
 except OSError:
     px = []
 tpl = tpl.replace("__PROXIES__", json.dumps(px[:14]))
