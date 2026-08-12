@@ -876,7 +876,9 @@ function openModal(r){
   const cats=[]; for(let i=0;i<CATS.length;i++) if((r.m&(1<<i)) && CATS[i]) cats.push(CATS[i]);
   const types = [];
   types.push(/[a-z]/.test(r.n)?"letters":null, r.dig?"numbers":null, r.us?"underscores":null, r.hy?"hyphens":null);
-  const src = r.v ? "Sony account endpoint ✓" : "not checked yet — queued for the background scan";
+  const src = platform==="twitch"
+      ? (twitchStore[r.n] ? "Twitch GQL (account lookup) ✓" : "not checked on Twitch yet")
+      : (r.v ? "Sony account endpoint ✓" : "not checked yet — queued for the background scan");
   const wIdx = (r.w === 4 && r.len > 3) ? 5 : r.w;   // legacy data: 406 on >3 chars shows as reserved3
   const reason = r.v && wIdx ? WHY[wIdx] : null;
   let gen = null;
@@ -912,16 +914,19 @@ function openModal(r){
   $("mfav").onclick = ()=>{ toggleFav(r.n); $("modal").querySelector("#mfav").textContent = favs.has(r.n)?"★ Remove favourite":"☆ Add favourite"; render(); };
   $("mcopy").onclick = async ()=>{ try{ await navigator.clipboard.writeText(r.n); toast("Copied “"+r.n+"”"); }catch(e){ toast("Copy blocked here — select the name manually"); } };
   $("mcheck").onclick = async ()=>{
-    if(r.v){
-      $("mav").innerHTML = availBadge(r);
-      $("mdays").textContent = relDays(r.d);
-      toast(`“${r.n}” already verified via Sony (${WHY[(r.w===4&&r.len>3)?5:r.w]||"checked"})`);
+    const already = (platform==="twitch") ? !!twitchStore[r.n] : r.v;
+    if(already){
+      const vr = viewOf(r);
+      $("mav").innerHTML = availBadge(vr);
+      $("mdays").textContent = relDays(vr.d);
+      const who = platform==="twitch" ? "Twitch" : "Sony";
+      toast(`“${r.n}” already checked on ${who}`);
       return;
     }
-    $("mav").innerHTML = `<span class="badge b-unknown"><span class="dot"></span>Checking…</span>`;
+    $("mav").innerHTML = `<span class="badge b-unknown"><span class="dot"></span>Checking ${platform==="twitch"?"Twitch":"Sony"}…</span>`;
     if(!LIVE){
       setTimeout(()=>{
-        $("mav").innerHTML = availBadge(r);
+        $("mav").innerHTML = availBadge(viewOf(r));
         toast("Live checking works in the hosted app (python3 server.py)");
       }, 300);
       return;
@@ -929,28 +934,35 @@ function openModal(r){
     $("mcheck").disabled = true;
     const j = await fetch(platCheckUrl(r.n)).then(x=>x.json()).catch(()=>null);
     $("mcheck").disabled = false;
+    const vr = viewOf(r);
     if(j && j.ok){
       applyLive(r.n, j);
-      $("mav").innerHTML = availBadge(r);
+      const v2 = viewOf(r);
+      $("mav").innerHTML = availBadge(v2);
       $("mdays").textContent = "just now";
-      const lbl = WHY[(WHYIDX[j.why]===4&&r.len>3)?5:WHYIDX[j.why]]||"checked";
-      toast(j.a===0 ? `“${r.n}” is AVAILABLE on Sony's endpoint ✓` : `Sony says: ${lbl}`);
+      if(platform==="twitch"){
+        toast(j.a===0 ? `“${r.n}” — no Twitch account (signup/rename may still reject)` : `Twitch: taken`);
+      } else {
+        const lbl = WHY[(WHYIDX[j.why]===4&&r.len>3)?5:WHYIDX[j.why]]||"checked";
+        toast(j.a===0 ? `“${r.n}” is AVAILABLE on Sony's endpoint ✓` : `Sony says: ${lbl}`);
+      }
       render();
     } else if(j && j.error==="cooldown"){
-      $("mav").innerHTML = availBadge(r);
+      $("mav").innerHTML = availBadge(vr);
       if(j.queued || (j.retry_after||0) >= 90){
-        toast("Sony blocks Cloudflare — queued. Scanner will answer in ~2 min");
-        pollQueued(r.n);
+        toast(platform==="twitch" ? "Twitch check paced — try again shortly" : "Sony blocks Cloudflare — queued");
+        if(platform!=="twitch") pollQueued(r.n);
       } else {
         toast(`Rate-limited — try again in ~${j.retry_after||60}s`);
       }
     } else {
-      $("mav").innerHTML = availBadge(r);
-      toast("Live check failed — try again shortly");
+      $("mav").innerHTML = availBadge(vr);
+      toast((j && j.error) ? `Check failed (${j.error})` : "Live check failed — try again shortly");
     }
   };
-  // opening an unverified name IS intent to know it — fire the live check automatically
-  if(!r.v && LIVE && CHECK_OK){
+  // auto-check if THIS platform has no verdict yet
+  const need = (platform==="twitch") ? !twitchStore[r.n] : !r.v;
+  if(need && LIVE && CHECK_OK){
     setTimeout(()=>{ const b=$("mcheck"); if(b && !b.disabled) b.click(); }, 80);
   }
 }
@@ -1167,7 +1179,7 @@ function maybeLive(){
     return;
   }
   if(!LIVE || !CHECK_OK){
-    livebar(`<span>“${name}” isn't in the offline index, and this deployment has no live-check API to ask Sony. Run the full app (<code>python3 server.py</code>) or a mirror with <code>/api/check</code> (see deploy/HOSTING.md).</span>`);
+    livebar(`<span>“${name}” isn't in the offline index, and this deployment has no live-check API. Run the full app (<code>python3 server.py</code>) or open aliashq.pages.dev.</span>`);
     return;
   }
   liveCheck(name);
@@ -1231,6 +1243,7 @@ const PLATS = [
   {id:"discord", label:"Discord", live:false}
 ];
 let platform = "psn";
+try{ const s=localStorage.getItem("aliasplat"); if(s==="twitch"||s==="psn") platform=s; }catch(e){}
 function platCheckUrl(name){
   return "/api/check?platform=" + encodeURIComponent(platform) + "&onlineId=" + encodeURIComponent(name);
 }
@@ -1252,6 +1265,7 @@ function buildPlats(){
     if(!p.live){ toast(p.label + " isn’t wired yet"); return; }
     if(p.id===platform) return;
     platform = p.id;
+    try{ localStorage.setItem("aliasplat", platform); }catch(e){}
     const box = $("search");
     if(box) box.placeholder = platform==="twitch" ? "Search Twitch names…  ( / )" : "Search PlayStation IDs…  ( / )";
     state.shown = PAGE;
@@ -1259,7 +1273,9 @@ function buildPlats(){
     if(LIVE && +refreshMs>0) syncNow();
   });
 }
-rehydrateLive(); buildPlats(); buildChips(); render(); setHeadOffset(); setTimeout(setHeadOffset, 300);
+rehydrateLive(); buildPlats(); buildChips();
+const _sb=$("search"); if(_sb) _sb.placeholder = platform==="twitch" ? "Search Twitch names…  ( / )" : "Search PlayStation IDs…  ( / )";
+render(); setHeadOffset(); setTimeout(setHeadOffset, 300);
 const rsel = $("refresh");
 if(rsel){
   const opts = [0, 30000, 60000, 300000];
