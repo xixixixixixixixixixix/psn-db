@@ -14,12 +14,16 @@ mkdir -p "$out"
 cp index.html "$out/index.html"
 
 python3 - <<'EOF'
-import glob, json, string, time
+import glob, json, os, string, time
 merged = {}
 for f in glob.glob("data/verified*.json"):
+    bn = os.path.basename(f).lower()
+    if any(p in bn for p in ("twitch", "steam", "xbox", "discord")):
+        continue
     try:
         for k, v in json.load(open(f)).items():
-            if isinstance(v, dict):
+            if isinstance(v, dict) and (not v.get("why") or v.get("why") in
+                    ("available", "taken", "blocked", "reserved3", "reserved")):
                 merged[k] = v
     except Exception:
         pass

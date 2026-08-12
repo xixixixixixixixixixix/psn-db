@@ -449,10 +449,21 @@ while made < 800 and tries < 20000:
 HERE = os.path.dirname(os.path.abspath(__file__))
 VERIFIED = {}
 import glob as _glob
+# PSN catalogue only. verified_twitch.json (and any future platform file) must
+# never overwrite Sony verdicts — a Twitch "no_account" is NOT PSN-available.
+PSN_WHYS = {"available", "taken", "blocked", "reserved3", "reserved"}
 for _vf in sorted(_glob.glob(os.path.join(HERE, "data", "verified*.json"))):
+    _bn = os.path.basename(_vf).lower()
+    if "twitch" in _bn or "steam" in _bn or "xbox" in _bn or "discord" in _bn:
+        continue
     for _k, _v in json.load(open(_vf)).items():
+        if not isinstance(_v, dict):
+            continue
+        _why = _v.get("why")
+        if _why and _why not in PSN_WHYS:
+            continue
         if _k not in VERIFIED or _v.get("ts", 0) > VERIFIED[_k].get("ts", 0):
-            VERIFIED[_k] = _v          # latest timestamp wins across shards
+            VERIFIED[_k] = _v          # latest timestamp wins across PSN shards
 CLASS3 = {}
 _c3 = os.path.join(HERE, "data", "class3.json")
 if os.path.exists(_c3):
@@ -482,6 +493,9 @@ for name, (sc, m) in entries.items():
         v = VERIFIED[name]
         if v.get("a") is None:
             a, d5, ver, why, nck = 2, None, 0, 0, 0  # inconclusive -> leave unverified
+        elif v.get("a") == 0 and v.get("why") != "available":
+            # foreign-platform leftover (e.g. Twitch no_account) — not a Sony 201
+            a, d5, ver, why, nck = 2, None, 0, 0, 0
         else:
             a = 0 if v["a"] == 0 else 1
             d5, ver, why = v["ts"], 1, WHY.index(v["why"]) if v["why"] in WHY else 0
@@ -775,9 +789,10 @@ function filtered(){
     if(platform==="twitch" && twitchStore[r.n] && twitchStore[r.n].a===1) return false;
     if(q && !r.n.includes(q)) return false;
     if(state.favOnly && !favs.has(r.n)) return false;
-    if(state.verifiedOnly && !r.v) return false;
+    const vr = viewOf(r);
+    if(state.verifiedOnly && !vr.v) return false;
     if(state.tiers.size && !state.tiers.has(tierIdx(r.s))) return false;
-    if(state.avails.size && !state.avails.has(r.a)) return false;
+    if(state.avails.size && !state.avails.has(availKey(vr))) return false;
     if(r.len < state.lenMin || r.len > state.lenMax) return false;
     for(const c of state.cats) if(!(r.m & (1<<c))) return false;
     if(state.gens.size && ![...state.gens].some(g => r.m & (1 << (13+g)))) return false;
@@ -810,12 +825,23 @@ function catPills(m){
   const show = out.slice(0,3).map(i=>`<span class="catpill">${CATS[i]}</span>`).join("");
   return show + (out.length>3? `<span class="catpill">+${out.length-3}</span>`:"");
 }
+function availKey(r){
+  /* 0 = Available (PSN) / No account (Twitch); 1 = taken; 2 = unknown */
+  if(platform==="twitch"){
+    if(!r.v) return 2;
+    return r.a===0 ? 0 : 1;
+  }
+  if(r.a===0 && r.v && r.w===1) return 0;   // Sony 201 only
+  if(r.a===1) return 1;
+  return 2;
+}
 function availBadge(r){
   const tag = r.v ? `<span class="srctag live">✓ live</span>` : "";
-  const b = (platform==="twitch" && r.v && r.a===0)
-          ? `<span class="badge b-unknown"><span class="dot"></span>No account</span>`
-          : r.a===0? `<span class="badge b-avail"><span class="dot"></span>Available</span>`
-          : r.a===1? `<span class="badge b-taken"><span class="dot"></span>Taken</span>`
+  if(platform==="twitch" && r.v && r.a===0)
+    return `<span class="badge b-unknown"><span class="dot"></span>No account</span>` + tag;
+  const k = availKey(r);
+  const b = k===0? `<span class="badge b-avail"><span class="dot"></span>Available</span>`
+          : k===1? `<span class="badge b-taken"><span class="dot"></span>Taken</span>`
           : `<span class="badge b-unknown"><span class="dot"></span>Unknown</span>`;
   return b + tag;
 }
@@ -860,7 +886,15 @@ function render(){
 }
 function renderStats(){
   const t=[0,0,0,0,0]; let av=0, ver=0, verAv=0, listed=0;
-  for(const r of ALL){ if(r.dropped || /\d/.test(r.n)) continue; listed++; t[tierIdx(r.s)]++; if(r.a===0)av++; if(r.v){ver++; if(r.a===0)verAv++;} }
+  for(const raw of ALL){
+    if(raw.dropped || /\d/.test(raw.n)) continue;
+    const r = viewOf(raw);
+    listed++; t[tierIdx(r.s)]++;
+    const k = availKey(r);
+    if(k===0) av++;
+    if(r.v){ ver++; if(k===0) verAv++; }
+  }
+  const availLbl = platform==="twitch" ? "No account (GQL)" : "Available (verified)";
   $("stats").innerHTML =
     `<div class="stat">Listed <b>${listed.toLocaleString()}</b></div>`+
     TIERS.map((x,i)=>`<div class="stat"><span class="tier ${x.cls}">${x.k==="Common"?"Common":x.k}</span> <b>${t[i].toLocaleString()}</b></div>`).join("")+
@@ -1017,7 +1051,7 @@ $("lenmax").addEventListener("change", e=>{ state.lenMax=Math.max(3,Math.min(16,
 function buildChips(){
   const tc=$("tierchips"); tc.innerHTML = TIERS.map((t,i)=>`<span class="chip" data-i="${i}">${t.k==="Common"?"Common":t.k}</span>`).join("");
   [...tc.children].forEach(c=>c.onclick=()=>{ const i=+c.dataset.i; state.tiers.has(i)?state.tiers.delete(i):state.tiers.add(i); c.classList.toggle("on"); state.shown=PAGE; render(); });
-  const ac=$("availchips"); ac.innerHTML = [[0,"Available"],[2,"Unknown"]].map(([i,a])=>`<span class="chip" data-i="${i}">${a}</span>`).join("");
+  const ac=$("availchips"); ac.innerHTML = [[0, platform==="twitch"?"No account":"Available"],[2,"Unknown"]].map(([i,a])=>`<span class="chip" data-i="${i}">${a}</span>`).join("");
   [...ac.children].forEach(c=>c.onclick=()=>{ const i=+c.dataset.i; state.avails.has(i)?state.avails.delete(i):state.avails.add(i); c.classList.toggle("on"); state.shown=PAGE; render(); });
   const vc=$("verchip");
   vc.classList.toggle("on", state.verifiedOnly);
@@ -1077,6 +1111,9 @@ function applyLive(name, j){
     const r = nameFind(name);
     return r ? viewOf(r) : null;
   }
+  if(j.a===0 && j.why && j.why!=="available"){
+    return nameFind(name) ? viewOf(nameFind(name)) : null;
+  }
   let r = nameFind(name);
   if(j.a === 1){                                  // taken / blocked / reserved -> never listed
     if(r && !r.dropped){ r.dropped = 1; }         // corpse stays indexed so a flip can resurrect it
@@ -1106,6 +1143,9 @@ function rehydrateLive(){
       TAKENIDX.set(name, {w: rec.w, ts: rec.ts});
       continue;
     }
+    const tk = TAKENIDX.get(name);
+    if(tk && (tk.ts||0) >= (rec.ts||0)){ delete liveStore[name]; continue; }
+    if(rec.w && rec.w!==1){ continue; }           // not a Sony-available why
     if(r){ if(!r.v){ if(r.dropped){ delete r.dropped; } r.a=rec.a; r.v=1; r.w=rec.w; r.ck=rec.ck; r.d=d; } }
     else { const nr = {n:name, s:rec.s||quickScore(name), m:rec.m||quickMask(name), a:rec.a, d,
                    v:1, w:rec.w, ck:rec.ck, len:name.length,
@@ -1269,7 +1309,7 @@ function buildPlats(){
     const box = $("search");
     if(box) box.placeholder = platform==="twitch" ? "Search Twitch names…  ( / )" : "Search PlayStation IDs…  ( / )";
     state.shown = PAGE;
-    buildPlats(); render();
+    buildPlats(); buildChips(); render();
     if(LIVE && +refreshMs>0) syncNow();
   });
 }

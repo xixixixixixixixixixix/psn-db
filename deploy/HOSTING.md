@@ -9,7 +9,7 @@ fresh data anytime:
 cd psn-db
 python3 build.py && bash deploy/pack.sh
 set -a && . deploy/.cf.env && set +a
-npx wrangler@3 pages deploy deploy/site --project-name psn-ids-db --branch main
+npx wrangler@3 pages deploy deploy/site --project-name aliashq --branch main
 ```
 
 What works on the mirror: full searchable catalogue, rarity tiers, semi/final

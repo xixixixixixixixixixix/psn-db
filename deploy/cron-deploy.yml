@@ -61,6 +61,9 @@ jobs:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
         run: timeout 420 python3 -u server.py || true
 
+      - name: Reconfirm every PSN Available against Sony
+        run: python3 confirm.py 0
+
       - name: Rebuild static site + worker bundle
         run: python3 build.py && bash deploy/pack.sh
 
