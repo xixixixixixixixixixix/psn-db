@@ -70,6 +70,6 @@ jobs:
         run: |
           git config user.name "psn-refresh-bot"
           git config user.email "psn-refresh-bot@users.noreply.github.com"
-          git add data/verified_live.json data/proxies.txt
+          git add data/verified_live.json data/proxies.txt data/scan_cursor.txt
           git diff --cached --quiet || git commit -m "refresh: $(date -u +%Y-%m-%dT%H:%MZ)"
           git push

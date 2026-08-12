@@ -36,6 +36,7 @@ import glob
 import json
 import os
 import re
+import signal
 import sys
 import threading
 import time
@@ -50,6 +51,7 @@ LIVE_OUT = os.path.join(HERE, "data", "verified_live.json")
 CLASS3 = os.path.join(HERE, "data", "class3.json")
 INDEX = os.path.join(HERE, "index.html")
 SCAN_QUEUE = os.path.join(HERE, "data", "sweep_queue.txt")
+CURSOR_FILE = os.path.join(HERE, "data", "scan_cursor.txt")
 PROXY_FILE = os.environ.get("PROXIES", os.path.join(HERE, "data", "proxies.txt"))
 PORT = int(os.environ.get("PORT", "8080"))
 MIN_INTERVAL = float(os.environ.get("PSN_INTERVAL", "0.35"))
@@ -64,7 +66,8 @@ _io_lock = threading.Lock()
 _pending = {}
 _last_flush = 0.0
 _c3 = None
-_stats = {"started": int(time.time()), "checked": 0, "scan_total": 0, "scan_left": None}
+_stats = {"started": int(time.time()), "checked": 0, "scan_total": 0, "scan_left": None,
+          "scan_cursor": None, "scan_len": None}
 
 
 def answered(rec):
@@ -236,74 +239,176 @@ def load_nodes():
     return nodes
 
 
-# ---------------------------------------------------------------- scanner
+# ---------------------------------------------------------------- systematic scanner (aaaa, aaab, … then 5-char, up to 16)
+# 3-char is class-reserved and skipped. Letter-only ids are generated in order.
+# Catalogue names with digits/_/- of a finished length are drained before bumping.
+_cursor = "aaaa"
+_cursor_lock = threading.Lock()
+_pending_extras = []
+_extras_by_len = {}
+_last_cursor_save = 0.0
+
+
+def succ_letter(s):
+    """Next a-z id: aaaa → aaab → … → aaaz → aaba → … → zzzz → aaaaa."""
+    chars = list(s)
+    i = len(chars) - 1
+    while i >= 0:
+        if chars[i] < "z":
+            chars[i] = chr(ord(chars[i]) + 1)
+            for j in range(i + 1, len(chars)):
+                chars[j] = "a"
+            return "".join(chars)
+        i -= 1
+    if len(s) < 16:
+        return "a" * (len(s) + 1)
+    return None
+
+
+def load_cursor():
+    global _cursor
+    try:
+        s = open(CURSOR_FILE).read().strip().lower()
+    except OSError:
+        return
+    if re.fullmatch(r"[a-z]{4,16}", s):
+        _cursor = s
+
+
+def save_cursor(force=False):
+    global _last_cursor_save
+    now = time.time()
+    if not force and now - _last_cursor_save < 2.0:
+        return
+    tmp = CURSOR_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        f.write((_cursor or "") + "\n")
+    os.replace(tmp, CURSOR_FILE)
+    _last_cursor_save = now
+    _stats["scan_cursor"] = _cursor
+    _stats["scan_len"] = len(_cursor) if _cursor else None
+
+
+def load_extras():
+    """Non-letter catalogue names, grouped by length, already (len, a-z) sorted."""
+    global _extras_by_len
+    by = {n: [] for n in range(4, 17)}
+    try:
+        for line in open(SCAN_QUEUE):
+            n = line.strip().lower()
+            if 4 <= len(n) <= 16 and not n.isalpha() and VALID.match(n):
+                by[len(n)].append(n)
+    except OSError:
+        pass
+    _extras_by_len = by
+
+
+def _advance_locked():
+    """Move _cursor one step; if length bumps, queue extras of the finished length."""
+    global _cursor
+    old = _cursor
+    nxt = succ_letter(old) if old else None
+    if old and (nxt is None or len(nxt) > len(old)):
+        extras = [n for n in _extras_by_len.get(len(old), [])
+                  if not answered(_cache.get(n))]
+        _pending_extras.extend(extras)
+        if extras:
+            print(f"[scan] len {len(old)} letters done — {len(extras)} digit/_/- extras",
+                  flush=True)
+    _cursor = nxt
+
+
+def next_work():
+    """Next name in aaaa, aaab, … order. None once 16-char letters are exhausted."""
+    with _cursor_lock:
+        while _pending_extras:
+            n = _pending_extras.pop(0)
+            if not answered(_cache.get(n)):
+                return n
+        while _cursor and answered(_cache.get(_cursor)):
+            _advance_locked()
+        if _pending_extras:
+            n = _pending_extras.pop(0)
+            save_cursor()
+            return n
+        if not _cursor:
+            save_cursor(force=True)
+            return None
+        n = _cursor
+        _advance_locked()
+        save_cursor()
+        _stats["scan_cursor"] = _cursor
+        _stats["scan_len"] = len(_cursor) if _cursor else len(n)
+        return n
+
+
 def scanner():
+    load_cursor()
+    load_extras()
+    _stats["scan_cursor"] = _cursor
+    _stats["scan_len"] = len(_cursor) if _cursor else None
     nodes = load_nodes()[:MAX_WORKERS]
-    print(f"[scan] on — {len(nodes)} proxy node(s) + direct for live checks; ~{1/MIN_INTERVAL:.1f} req/s per IP", flush=True)
+    extra_n = sum(len(v) for v in _extras_by_len.values())
+    print(f"[scan] lex mode — start {_cursor} (len {len(_cursor) if _cursor else '-'}); "
+          f"3-char skipped (class reserved); {extra_n} digit/_/- extras after each length",
+          flush=True)
+    print(f"[scan] on — {len(nodes)} proxy node(s) + direct for live checks; "
+          f"~{1/MIN_INTERVAL:.1f} req/s per IP", flush=True)
     if nodes:
-        print(f"[scan] aggregate ceiling ~{(len(nodes))/MIN_INTERVAL:.1f} req/s (per-IP safe: never faster per node)", flush=True)
+        print(f"[scan] aggregate ceiling ~{(len(nodes))/MIN_INTERVAL:.1f} req/s "
+              f"(per-IP safe: never faster per node)", flush=True)
+
     passno = 0
     while True:
         passno += 1
-        try:
-            names = [l.strip() for l in open(SCAN_QUEUE) if l.strip()]
-        except OSError:
-            print("[scan] sweep_queue.txt missing — idle 5 min", flush=True)
-            time.sleep(300)
-            continue
-        todo = [n for n in names if len(n) != 3 and not answered(_cache.get(n))]
-        _stats["scan_total"] = len(names)
-        _stats["scan_left"] = len(todo)
-        if not todo:
-            print("[scan] queue fully answered — idle 15 min", flush=True)
-            time.sleep(900)
-            continue
-        # one worker per node, shared thread-safe position pointer
-        pos = {"i": 0}
-        pos_lock = threading.Lock()
         done_pass = [0]
         t0 = time.time()
-
-        def next_name():
-            with pos_lock:
-                i = pos["i"]
-                pos["i"] += 1
-            return todo[i] if i < len(todo) else None
+        stop = {"done": False}
 
         def worker(node):
-            while True:
-                n = next_name()
+            while not stop["done"]:
+                n = next_work()
                 if n is None:
+                    stop["done"] = True
                     return
                 if answered(_cache.get(n)):
                     continue
                 rec, err = node.check(n)
                 if rec is not None:
                     done_pass[0] += 1
-                    if done_pass[0] % 500 == 0:
+                    if done_pass[0] % 200 == 0:
                         rate = done_pass[0] / max(1.0, time.time() - t0)
-                        print(f"[scan] pass {passno}: {done_pass[0]} new ({rate:.2f}/s aggregate)", flush=True)
+                        print(f"[scan] {done_pass[0]} new ({rate:.2f}/s) cursor={_cursor}",
+                              flush=True)
                 else:
                     if err and err[0] == "cooldown":
                         time.sleep(min(45, err[1]))
-                    elif err and err[0] in ("no_result",) :
+                    elif err and err[0] in ("no_result",):
                         time.sleep(2)
                     else:
                         time.sleep(5)
 
         if not nodes:
-            # no proxies: scan on the direct connection (single worker)
             worker(DIRECT)
         else:
-            threads = [threading.Thread(target=worker, args=(nd,), daemon=True) for nd in nodes]
+            threads = [threading.Thread(target=worker, args=(nd,), daemon=True)
+                       for nd in nodes]
             for t in threads:
                 t.start()
             for t in threads:
                 t.join()
         _flush()
+        save_cursor(force=True)
         rate = done_pass[0] / max(1.0, time.time() - t0)
-        print(f"[scan] pass {passno} done: {done_pass[0]} new ({rate:.2f}/s). Re-reading queue in 5 min.", flush=True)
-        time.sleep(300)
+        if _cursor is None and not _pending_extras:
+            print(f"[scan] a-z space 4–16 exhausted ({done_pass[0]} this pass, "
+                  f"{rate:.2f}/s). Idle 15 min.", flush=True)
+            time.sleep(900)
+            load_cache()
+            continue
+        print(f"[scan] pass {passno} done: {done_pass[0]} new ({rate:.2f}/s) "
+              f"cursor={_cursor}. Continuing in 5s.", flush=True)
+        time.sleep(5)
 
 
 # ---------------------------------------------------------------- http layer
@@ -399,10 +504,22 @@ class Handler(BaseHTTPRequestHandler):
             "direct": {"ok": DIRECT.ok, "fails": DIRECT.fails,
                        "dead": DIRECT.dead,
                        "cooldown_in": max(0, int(DIRECT.cooldown_until - time.time()))},
+            "scan_cursor": _stats.get("scan_cursor") or _cursor,
+            "scan_len": _stats.get("scan_len") or (len(_cursor) if _cursor else None),
+            "scan_mode": "lex",
         })
 
 
 def main():
+    def _shutdown(*_):
+        try:
+            save_cursor(force=True)
+            _flush()
+        except Exception:
+            pass
+        os._exit(0)
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
     load_cache()
     if SCAN_ON:
         threading.Thread(target=scanner, daemon=True).start()
