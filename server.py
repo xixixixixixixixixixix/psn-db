@@ -296,7 +296,8 @@ def load_extras():
     try:
         for line in open(SCAN_QUEUE):
             n = line.strip().lower()
-            if 4 <= len(n) <= 16 and not n.isalpha() and VALID.match(n):
+            if (4 <= len(n) <= 16 and not n.isalpha() and VALID.match(n)
+                    and not any(c.isdigit() for c in n)):
                 by[len(n)].append(n)
     except OSError:
         pass
