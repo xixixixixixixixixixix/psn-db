@@ -1,0 +1,41 @@
+# Twitch-only walker — cheap (GQL, no proxies). Every 5 min, 4 min of scan,
+# writes KV so open pages pick it up via /api/updates. Does not rebuild the site.
+name: twitch-refresh
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: twitch-refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+  CF_KV_NAMESPACE_ID: ${{ secrets.CF_KV_NAMESPACE_ID }}
+
+jobs:
+  twitch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Walk Twitch GQL (4 min)
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          TWITCH_INTERVAL: "0.10"
+          TWITCH_WORKERS: "6"
+        run: timeout 240 python3 -u deploy/twitch_scan.py || true
+      - name: Commit cursor + pool
+        run: |
+          git config user.name "psn-refresh-bot"
+          git config user.email "psn-refresh-bot@users.noreply.github.com"
+          git add data/verified_twitch.json data/twitch_cursor.txt
+          git diff --cached --quiet || git commit -m "twitch: $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push

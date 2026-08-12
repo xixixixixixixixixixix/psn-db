@@ -736,6 +736,7 @@ const relDays = d => d===null? "never" : d===0 ? "just now" : d===1 ? "1d ago" :
 const lettersOnly = n => /^[a-z]+$/.test(n);
 
 const WHY = ["-", "Available", "Taken (account exists)", "Blocked word (Sony)", "Reserved — 3-char IDs are no longer issued", "Reserved by Sony (policy, trademark or a previous holder)"];
+/* twitch a=0 uses the same WHY[1] slot in applyLive; badge text is overridden to "No account" */
 const ALL = ROWS.map(r=>{
   const full = r.length >= 7;            // compact rows are [name,score,mask] = unchecked (Unknown)
   const ver = full && r[5] === 1;
@@ -811,7 +812,9 @@ function catPills(m){
 }
 function availBadge(r){
   const tag = r.v ? `<span class="srctag live">✓ live</span>` : "";
-  const b = r.a===0? `<span class="badge b-avail"><span class="dot"></span>Available</span>`
+  const b = (platform==="twitch" && r.v && r.a===0)
+          ? `<span class="badge b-unknown"><span class="dot"></span>No account</span>`
+          : r.a===0? `<span class="badge b-avail"><span class="dot"></span>Available</span>`
           : r.a===1? `<span class="badge b-taken"><span class="dot"></span>Taken</span>`
           : `<span class="badge b-unknown"><span class="dot"></span>Unknown</span>`;
   return b + tag;
@@ -1013,7 +1016,7 @@ function buildChips(){
 const LIVE = location.protocol === "http:" || location.protocol === "https:";
 let NET_OK = true, netFails = 0;            // sync/updates stream health
 let CHECK_OK = true, checkFails = 0;        // live-check endpoint health (separate: hosted mirrors may have check but no scanner stream)
-const WHYIDX = {available:1, taken:2, blocked:3, reserved3:4, reserved:5};
+const WHYIDX = {available:1, no_account:1, taken:2, blocked:3, reserved3:4, reserved:5};
 let liveStore = {};
 try{ liveStore = JSON.parse(localStorage.getItem("psnlive")||"{}"); }catch(e){}
 for(const k of Object.keys(liveStore)) if(/\d/.test(k)) delete liveStore[k];

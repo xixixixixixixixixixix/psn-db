@@ -230,7 +230,9 @@ async function checkTwitchGql(name) {
   if (!r.ok) return null;
   const j = await r.json();
   if (!j || !j.data || !("user" in j.data)) return null;
-  return j.data.user ? VERDICTS.taken : VERDICTS.available;
+  // user object = account exists. null = no account — NOT the same as
+  // claimable (Twitch holds renamed names ~6 months and reserves shorts).
+  return j.data.user ? VERDICTS.taken : { a: 0, why: "no_account" };
 }
 
 async function apiCheckTwitch(request, env, ctx) {

@@ -470,7 +470,8 @@ class Handler(BaseHTTPRequestHandler):
         user = (data.get("data") or {}).get("user")
         if "data" not in data or "user" not in (data.get("data") or {}):
             return self._json(502, {"ok": 0, "error": "twitch_bad_response"})
-        rec = {"a": 1 if user else 0, "why": "taken" if user else "available",
+        rec = {"a": 1 if user else 0,
+               "why": "taken" if user else "no_account",
                "ts": int(time.time()), "n": 1}
         return self._json(200, {"ok": 1, "name": name, "a": rec["a"], "why": rec["why"],
                                 "ts": rec["ts"], "n": 1, "cached": False, "platform": "twitch"})

@@ -124,7 +124,8 @@ def gql(name):
     if "data" not in data or "user" not in (data.get("data") or {}):
         return None
     user = data["data"]["user"]
-    return {"a": 1 if user else 0, "why": "taken" if user else "available",
+    return {"a": 1 if user else 0,
+            "why": "taken" if user else "no_account",
             "ts": int(time.time()), "n": 1}
 
 
