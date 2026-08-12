@@ -1,0 +1,59 @@
+# GitHub Actions cron scanner — keeps a hosted mirror's data fresh for free.
+#
+# Setup:
+#   1. push this repo to GitHub
+#   2. cp deploy/psn-scan.yml .github/workflows/psn-scan.yml
+#   3. bash deploy/pack.sh && cp deploy/site/_worker.js .   # Pages serves /api/* via _worker.js at repo root
+#   4. connect the repo to Cloudflare Pages (build command: none / output: /)
+#
+# Every 6h: sweep ~10 min through the proxy fleet, rebuild index.html with the
+# new verified rows, commit -> connected Pages redeploys automatically.
+#
+# Minutes: 4 runs/day x ~11 min ≈ 1200 min/month — fits GitHub's free 2000 for
+# private repos; public repos get unlimited minutes. Make the repo public if
+# you can — nothing secret here (free proxies are public lists anyway).
+name: psn-scan
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: psn-scan
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sweep with proxy fleet (10 min)
+        env:
+          PSN_INTERVAL: "0.35"
+          PSN_WORKERS: "200"
+        run: timeout 600 python3 -u server.py || true
+
+      - name: Rebuild static site (bakes new finds into index.html)
+        run: python3 build.py
+
+      - name: Render mirror worker (stats constants) to repo root
+        run: bash deploy/pack.sh && cp deploy/site/_worker.js ./_worker.js
+
+      - name: Commit new data
+        run: |
+          git config user.name "psn-scan-bot"
+          git config user.email "psn-scan-bot@users.noreply.github.com"
+          git add data/verified_live.json index.html _worker.js
+          git diff --cached --quiet || git commit -m "scan: $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push

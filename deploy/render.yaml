@@ -1,0 +1,16 @@
+# Render free web service. Free plan sleeps after 15 min idle (wakes on hit,
+# ~30s cold start); the scanner only progresses while the service is awake.
+# For a real 24/7 scanner use Oracle Always Free or any cheap VPS with the
+# same Dockerfile.
+services:
+  - type: web
+    name: psn-db
+    runtime: docker
+    dockerfilePath: deploy/Dockerfile
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: PSN_INTERVAL
+        value: "1.0"   # datacenter egress IPs arrive hot at Akamai — go slower
+      - key: SCAN
+        value: "1"
