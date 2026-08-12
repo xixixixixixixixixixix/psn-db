@@ -130,7 +130,6 @@ footer li{margin:3px 0 3px 18px}
     <option value="len_desc">Sort: Longest</option>
     <option value="recent">Sort: Recently checked</option>
   </select>
-  <button class="btn" id="pokebtn">Pokémon</button>
   <button class="btn" id="favbtn">★ Favourites <span id="favcount"></span></button>
   <button class="btn" id="dice">Random pick</button>
   <button class="btn" id="export">Export CSV</button>
@@ -147,21 +146,11 @@ footer li{margin:3px 0 3px 18px}
 
 <main>
   <aside>
-    <div class="card"><h3>Rarity tier</h3><div class="chips" id="tierchips"></div></div>
+    <div class="card"><h3>Rarity</h3><div class="chips" id="tierchips"></div></div>
     <div class="card"><h3>Availability</h3><div class="chips" id="availchips"></div>
       <div class="chips" style="margin-top:8px"><span class="chip" id="verchip">✓ verified only</span></div></div>
-    <div class="card"><h3>Categories <span style="text-transform:none;font-size:10px">(all selected must match)</span></h3><div class="chips" id="catchips"></div></div>
-    <div class="card"><h3>Pokémon generation <span style="text-transform:none;font-size:10px">(any match)</span></h3><div class="chips" id="genchips"></div></div>
-    <div class="card"><h3>Character count</h3>
+    <div class="card"><h3>Length</h3>
       <div class="lenrow"><input id="lenmin" type="number" min="3" max="16" value="3"> to <input id="lenmax" type="number" min="3" max="16" value="16"></div>
-    </div>
-    <div class="card"><h3>Character types</h3><div class="chips" id="charchips"></div></div>
-    <div id="validator">
-      <h3>PSN format validator</h3>
-      <input class="vinput mono" id="vinput" placeholder="Type any Online ID…" maxlength="16" autocomplete="off">
-      <ul id="vrules"></ul>
-      <div class="vverdict" id="vverdict"></div>
-      <div class="note" style="margin-top:8px">Format rules only — doesn’t check if the ID is registered.</div>
     </div>
   </aside>
 
@@ -335,7 +324,7 @@ function render(){
 }
 function renderStats(){
   const t=[0,0,0,0,0]; let av=0, ver=0, verAv=0, listed=0;
-  for(const r of ALL){ if(r.dropped) continue; listed++; t[tierIdx(r.s)]++; if(r.a===0)av++; if(r.v){ver++; if(r.a===0)verAv++;} }
+  for(const r of ALL){ if(r.dropped || /\d/.test(r.n)) continue; listed++; t[tierIdx(r.s)]++; if(r.a===0)av++; if(r.v){ver++; if(r.a===0)verAv++;} }
   $("stats").innerHTML =
     `<div class="stat">Listed <b>${listed.toLocaleString()}</b></div>`+
     TIERS.map((x,i)=>`<div class="stat"><span class="tier ${x.cls}">${x.k==="Common"?"Common":x.k}</span> <b>${t[i].toLocaleString()}</b></div>`).join("")+
@@ -453,12 +442,6 @@ $("search").addEventListener("input", e=>{
 $("sort").addEventListener("change", e=>{ state.sort=e.target.value; render(); });
 $("loadmore").onclick = ()=>{ state.shown+=PAGE; render(); };
 $("favbtn").onclick = e=>{ state.favOnly=!state.favOnly; e.currentTarget.classList.toggle("on",state.favOnly); state.shown=PAGE; render(); };
-$("pokebtn").onclick = e=>{
-  const on = !(state.cats.size===1 && state.cats.has(13));
-  state.cats = new Set(); if(on) state.cats.add(13);
-  e.currentTarget.classList.toggle("on", on);
-  buildChips(); state.shown=PAGE; render();
-};
 $("dice").onclick = ()=>{ const l=filtered(); if(!l.length) return toast("Nothing to pick from"); openModal(l[Math.floor(Math.random()*l.length)]); };
 $("export").onclick = ()=>{
   const l = sortList(filtered()).slice(0,5000);
@@ -475,7 +458,7 @@ $("reset").onclick = ()=>{
   state.q=""; state.tiers.clear(); state.avails.clear(); state.cats.clear(); state.chars.clear();
   state.lenMin=3; state.lenMax=16; state.favOnly=false; state.verifiedOnly=false; state.gens.clear(); state.sort="score_desc"; state.shown=PAGE;
   $("search").value=""; $("sort").value="score_desc"; $("lenmin").value=3; $("lenmax").value=16;
-  $("favbtn").classList.remove("on"); $("pokebtn").classList.remove("on"); buildChips(); render();
+  $("favbtn").classList.remove("on"); buildChips(); render();
 };
 
 /* length */
@@ -484,39 +467,14 @@ $("lenmax").addEventListener("change", e=>{ state.lenMax=Math.max(3,Math.min(16,
 
 /* chips */
 function buildChips(){
-  const tc=$("tierchips"); tc.innerHTML = TIERS.map((t,i)=>`<span class="chip" data-i="${i}">${t.k==="Common"?"Common":t.k+" tier"}</span>`).join("");
+  const tc=$("tierchips"); tc.innerHTML = TIERS.map((t,i)=>`<span class="chip" data-i="${i}">${t.k==="Common"?"Common":t.k}</span>`).join("");
   [...tc.children].forEach(c=>c.onclick=()=>{ const i=+c.dataset.i; state.tiers.has(i)?state.tiers.delete(i):state.tiers.add(i); c.classList.toggle("on"); state.shown=PAGE; render(); });
   const ac=$("availchips"); ac.innerHTML = [[0,"Available"],[2,"Unknown"]].map(([i,a])=>`<span class="chip" data-i="${i}">${a}</span>`).join("");
   [...ac.children].forEach(c=>c.onclick=()=>{ const i=+c.dataset.i; state.avails.has(i)?state.avails.delete(i):state.avails.add(i); c.classList.toggle("on"); state.shown=PAGE; render(); });
-  const cc=$("catchips"); cc.innerHTML = CATS.map((a,i)=>a?`<span class="chip" data-i="${i}">${a}</span>`:"").join("");
-  [...cc.children].forEach(c=>c.onclick=()=>{ const i=+c.dataset.i; state.cats.has(i)?state.cats.delete(i):state.cats.add(i); c.classList.toggle("on"); state.shown=PAGE; render(); });
-  const hc=$("charchips"); const CL=["Letters only","Has underscore","Has hyphen"]; const CK=["letters","underscore","hyphen"];
-  hc.innerHTML = CL.map((a,i)=>`<span class="chip" data-k="${CK[i]}">${a}</span>`).join("");
-  [...hc.children].forEach(c=>c.onclick=()=>{ const k=c.dataset.k; state.chars.has(k)?state.chars.delete(k):state.chars.add(k); c.classList.toggle("on"); state.shown=PAGE; render(); });
   const vc=$("verchip");
   vc.classList.toggle("on", state.verifiedOnly);
   vc.onclick=()=>{ state.verifiedOnly=!state.verifiedOnly; vc.classList.toggle("on",state.verifiedOnly); state.shown=PAGE; render(); };
-  const gc=$("genchips");
-  gc.innerHTML = [1,2,3,4,5,6,7,8,9].map(g=>`<span class="chip" data-g="${g}">Gen ${g}</span>`).join("");
-  [...gc.children].forEach(c=>c.onclick=()=>{ const g=+c.dataset.g; state.gens.has(g)?state.gens.delete(g):state.gens.add(g); c.classList.toggle("on"); state.shown=PAGE; render(); });
 }
-
-/* ---------------- validator ---------------- */
-function validate(){
-  const v = $("vinput").value;
-  const rules = [
-    ["3–16 characters", v.length>=3 && v.length<=16],
-    ["Starts with a letter", /^[A-Za-z]/.test(v)],
-    ["Only letters, numbers, underscores, hyphens", /^[A-Za-z0-9_-]*$/.test(v)],
-    ["No spaces", !/\s/.test(v)]
-  ];
-  $("vrules").innerHTML = rules.map(([txt,ok])=>`<li class="${ok?"ok":"bad"}">${ok?"✓":"✗"} ${txt}</li>`).join("");
-  const all = rules.every(r=>r[1]);
-  const el = $("vverdict");
-  el.className = "vverdict "+(v? (all?"ok":"bad"):"");
-  el.textContent = v? (all? "Valid PSN Online ID format" : "Not valid — see failed rules") : "";
-}
-$("vinput").addEventListener("input", validate);
 
 /* ---------------- live check (served mode via server.py) ---------------- */
 const LIVE = location.protocol === "http:" || location.protocol === "https:";
@@ -670,7 +628,7 @@ function maybeLive(){
 }
 
 /* ---------------- background sync ---------------- */
-const BUILT_AT = 1786562807;
+const BUILT_AT = 1786563170;
 let refreshMs = 60000;
 try{ refreshMs = JSON.parse(localStorage.getItem("psnrefresh")||"60000"); }catch(e){}
 let lastSync = BUILT_AT;
