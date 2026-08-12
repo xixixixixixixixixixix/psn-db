@@ -775,6 +775,7 @@ function filtered(){
   const q = state.q.toLowerCase();
   return ALL.filter(r=>{
     if(r.dropped) return false;
+    if(/\d/.test(r.n)) return false;          // never list names with numbers
     if(q && !r.n.includes(q)) return false;
     if(state.favOnly && !favs.has(r.n)) return false;
     if(state.verifiedOnly && !r.v) return false;
@@ -860,7 +861,7 @@ function render(){
 }
 function renderStats(){
   const t=[0,0,0,0,0]; let av=0, ver=0, verAv=0, listed=0;
-  for(const r of ALL){ if(r.dropped) continue; listed++; t[tierIdx(r.s)]++; if(r.a===0)av++; if(r.v){ver++; if(r.a===0)verAv++;} }
+  for(const r of ALL){ if(r.dropped || /\d/.test(r.n)) continue; listed++; t[tierIdx(r.s)]++; if(r.a===0)av++; if(r.v){ver++; if(r.a===0)verAv++;} }
   $("stats").innerHTML =
     `<div class="stat">Listed <b>${listed.toLocaleString()}</b></div>`+
     TIERS.map((x,i)=>`<div class="stat"><span class="tier ${x.cls}">${x.k==="Common"?"Common":x.k}</span> <b>${t[i].toLocaleString()}</b></div>`).join("")+
@@ -1050,6 +1051,7 @@ let CHECK_OK = true, checkFails = 0;        // live-check endpoint health (separ
 const WHYIDX = {available:1, taken:2, blocked:3, reserved3:4, reserved:5};
 let liveStore = {};
 try{ liveStore = JSON.parse(localStorage.getItem("psnlive")||"{}"); }catch(e){}
+for(const k of Object.keys(liveStore)) if(/\d/.test(k)) delete liveStore[k];
 const saveLive = ()=>{ try{ localStorage.setItem("psnlive", JSON.stringify(liveStore)); }catch(e){} };
 const liveAsked = new Set();
 let liveT = null, liveDeb = null, bulkSync = false;
@@ -1079,6 +1081,11 @@ function quickMask(n){
   return m;
 }
 function applyLive(name, j){
+  if(/\d/.test(name)){                        // never list / store numbered IDs
+    delete liveStore[name];
+    const ex = nameFind(name); if(ex) ex.dropped = 1;
+    return null;
+  }
   const w = WHYIDX[j.why]||0, d = Math.max(0, Math.floor((Date.now()/1000 - j.ts)/86400));
   let r = nameFind(name);
   if(j.a === 1){                                  // taken / blocked / reserved -> never listed
@@ -1099,6 +1106,7 @@ function applyLive(name, j){
 }
 function rehydrateLive(){
   for(const name of Object.keys(liveStore)){
+    if(/\d/.test(name)){ delete liveStore[name]; continue; }
     const rec = liveStore[name];
     if(!rec || rec.a===undefined || !rec.ts) continue;
     const d = Math.max(0, Math.floor((Date.now()/1000 - rec.ts)/86400));

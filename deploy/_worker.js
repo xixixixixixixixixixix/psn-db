@@ -311,7 +311,9 @@ async function apiUpdates(url, env) {
   for (const k of list.keys) {
     const v = await kv.get(k.name, "json").catch(() => null);
     if (!v || !(v.ts > since)) continue;
-    rows.push({ nm: k.name.slice(4), a: v.a, why: v.why, ts: v.ts, n: v.n || 1 });
+    const nm = k.name.slice(4);
+    if (/\d/.test(nm)) continue;              // catalogue is letters / _ / - only
+    rows.push({ nm, a: v.a, why: v.why, ts: v.ts, n: v.n || 1 });
   }
   rows.sort((a, b) => a.ts - b.ts);
   return json(200, { ok: 1, rows: rows.slice(0, 5000),
