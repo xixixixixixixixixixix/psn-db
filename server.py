@@ -449,9 +449,39 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._json(404, {"ok": 0, "error": "not_found"})
 
+    def api_check_twitch(self, name):
+        if not re.fullmatch(r"[a-z][a-z0-9_]{3,24}", name):
+            return self._json(400, {"ok": 0, "error": "invalid_format",
+                                    "hint": "Twitch: 4–25 chars, letter first, letters/numbers/_ only"})
+        body = json.dumps({
+            "query": "query($login:String!){user(login:$login){id login}}",
+            "variables": {"login": name},
+        }).encode()
+        req = urllib.request.Request(
+            "https://gql.twitch.tv/gql", method="POST", data=body,
+            headers={"Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
+                     "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=12) as r:
+                data = json.loads(r.read())
+        except Exception as e:
+            return self._json(502, {"ok": 0, "error": "twitch_unreachable",
+                                    "hint": type(e).__name__})
+        user = (data.get("data") or {}).get("user")
+        if "data" not in data or "user" not in (data.get("data") or {}):
+            return self._json(502, {"ok": 0, "error": "twitch_bad_response"})
+        rec = {"a": 1 if user else 0, "why": "taken" if user else "available",
+               "ts": int(time.time()), "n": 1}
+        return self._json(200, {"ok": 1, "name": name, "a": rec["a"], "why": rec["why"],
+                                "ts": rec["ts"], "n": 1, "cached": False, "platform": "twitch"})
+
     def api_check(self, u):
         load_cache()
-        raw = (parse_qs(u.query).get("onlineId", [""])[0] or "")
+        qs = parse_qs(u.query)
+        if (qs.get("platform", ["psn"])[0] or "psn").lower() == "twitch":
+            raw = (qs.get("onlineId", [""])[0] or "")
+            return self.api_check_twitch(raw.strip().lower().lstrip("@").strip())
+        raw = (qs.get("onlineId", [""])[0] or "")
         name = raw.strip().lower().lstrip("@").strip()
         if not VALID.match(name):
             return self._json(400, {"ok": 0, "error": "invalid_format",

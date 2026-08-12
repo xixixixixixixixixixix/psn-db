@@ -770,6 +770,8 @@ function filtered(){
   return ALL.filter(r=>{
     if(r.dropped) return false;
     if(/\d/.test(r.n)) return false;          // never list names with numbers
+    if(platform==="twitch" && !twitchOk(r.n)) return false;
+    if(platform==="twitch" && twitchStore[r.n] && twitchStore[r.n].a===1) return false;
     if(q && !r.n.includes(q)) return false;
     if(state.favOnly && !favs.has(r.n)) return false;
     if(state.verifiedOnly && !r.v) return false;
@@ -831,7 +833,7 @@ function rowHTML(r){
 }
 function emptyRow(){
   const name = state.q.trim().toLowerCase().replace(/^@+/,"").replace(/\s+/g,"");
-  const tk = /^[a-z][a-z0-9_\-]{2,15}$/.test(name) ? TAKENIDX.get(name) : null;
+  const tk = (platform==="psn" && /^[a-z][a-z0-9_\-]{2,15}$/.test(name)) ? TAKENIDX.get(name) : null;
   if(tk){
     const lbl = WHY[(tk.w===4&&name.length>3)?5:tk.w]||"Taken";
     return `<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px">“${name}” is <b style="color:var(--red)">taken</b> — live-verified against Sony ${takenDays(tk)} (${lbl}).<br>It's removed from the catalogue but kept on record, so no re-check was needed.</td></tr>`;
@@ -847,7 +849,7 @@ function emptyRow(){
 function render(){
   const list = sortList(filtered());
   const slice = list.slice(0, state.shown);
-  $("rows").innerHTML = slice.map(rowHTML).join("") || emptyRow();
+  $("rows").innerHTML = slice.map(r=>rowHTML(viewOf(r))).join("") || emptyRow();
   $("count").textContent = `Showing ${slice.length.toLocaleString()} of ${list.length.toLocaleString()} matches · ${ALL.length.toLocaleString()} total entries`;
   $("loadmore").style.display = list.length>state.shown ? "block":"none";
   $("favcount").textContent = favs.size? `(${favs.size})`:"";
@@ -922,7 +924,7 @@ function openModal(r){
       return;
     }
     $("mcheck").disabled = true;
-    const j = await fetch("/api/check?onlineId=" + encodeURIComponent(r.n)).then(x=>x.json()).catch(()=>null);
+    const j = await fetch(platCheckUrl(r.n)).then(x=>x.json()).catch(()=>null);
     $("mcheck").disabled = false;
     if(j && j.ok){
       applyLive(r.n, j);
@@ -962,7 +964,7 @@ $("rows").addEventListener("click", e=>{
   const tr = e.target.closest("tr"); if(!tr) return;
   const r = nameFind(tr.dataset.n); if(!r) return;
   if(e.target.dataset.act==="fav"){ toggleFav(r.n); render(); return; }
-  openModal(r);
+  openModal(viewOf(r));
 });
 $("search").addEventListener("input", e=>{
   state.q = e.target.value.replace(/^@+/,"");
@@ -973,7 +975,7 @@ $("search").addEventListener("input", e=>{
 $("sort").addEventListener("change", e=>{ state.sort=e.target.value; render(); });
 $("loadmore").onclick = ()=>{ state.shown+=PAGE; render(); };
 $("favbtn").onclick = e=>{ state.favOnly=!state.favOnly; e.currentTarget.classList.toggle("on",state.favOnly); state.shown=PAGE; render(); };
-$("dice").onclick = ()=>{ const l=filtered(); if(!l.length) return toast("Nothing to pick from"); openModal(l[Math.floor(Math.random()*l.length)]); };
+$("dice").onclick = ()=>{ const l=filtered(); if(!l.length) return toast("Nothing to pick from"); openModal(viewOf(l[Math.floor(Math.random()*l.length)])); };
 $("export").onclick = ()=>{
   const l = sortList(filtered()).slice(0,5000);
   const csv = "username,availability,char_count,char_types,categories,rarity_score,rarity_tier,last_check\n"+l.map(r=>{
@@ -1016,6 +1018,10 @@ let liveStore = {};
 try{ liveStore = JSON.parse(localStorage.getItem("psnlive")||"{}"); }catch(e){}
 for(const k of Object.keys(liveStore)) if(/\d/.test(k)) delete liveStore[k];
 const saveLive = ()=>{ try{ localStorage.setItem("psnlive", JSON.stringify(liveStore)); }catch(e){} };
+let twitchStore = {};
+try{ twitchStore = JSON.parse(localStorage.getItem("twitchlive")||"{}"); }catch(e){}
+for(const k of Object.keys(twitchStore)) if(/\d/.test(k)) delete twitchStore[k];
+const saveTwitch = ()=>{ try{ localStorage.setItem("twitchlive", JSON.stringify(twitchStore)); }catch(e){} };
 const liveAsked = new Set();
 let liveT = null, liveDeb = null, bulkSync = false;
 
@@ -1045,11 +1051,17 @@ function quickMask(n){
 }
 function applyLive(name, j){
   if(/\d/.test(name)){                        // never list / store numbered IDs
-    delete liveStore[name];
+    delete liveStore[name]; delete twitchStore[name];
     const ex = nameFind(name); if(ex) ex.dropped = 1;
     return null;
   }
   const w = WHYIDX[j.why]||0, d = Math.max(0, Math.floor((Date.now()/1000 - j.ts)/86400));
+  if(platform==="twitch"){
+    twitchStore[name] = {a:j.a, w, ts:j.ts, ck:j.n||1};
+    if(!bulkSync) saveTwitch();
+    const r = nameFind(name);
+    return r ? viewOf(r) : null;
+  }
   let r = nameFind(name);
   if(j.a === 1){                                  // taken / blocked / reserved -> never listed
     if(r && !r.dropped){ r.dropped = 1; }         // corpse stays indexed so a flip can resurrect it
@@ -1094,7 +1106,7 @@ function pollQueued(name){
     n++;
     if(n > 18){ clearInterval(id); _pollers.delete(name); return; }
     try{
-      const j = await fetch("/api/check?onlineId=" + encodeURIComponent(name)).then(x=>x.json());
+      const j = await fetch(platCheckUrl(name)).then(x=>x.json());
       if(!(j && j.ok)) return;
       clearInterval(id); _pollers.delete(name);
       applyLive(name, j);
@@ -1111,7 +1123,7 @@ async function liveCheck(name){
   if(!LIVE || liveAsked.has(name)) return null;
   liveAsked.add(name);
   try{
-    const resp = await fetch("/api/check?onlineId=" + encodeURIComponent(name));
+    const resp = await fetch(platCheckUrl(name));
     const j = await resp.json();
     if(!j.ok){
       liveAsked.delete(name);
@@ -1179,7 +1191,7 @@ async function syncNow(){
   try{
     bulkSync = true;
     for(let round=0; round<30; round++){
-      const j = await fetch("/api/updates?since=" + lastSync).then(r=>r.json());
+      const j = await fetch("/api/updates?platform=" + encodeURIComponent(platform) + "&since=" + lastSync).then(r=>r.json());
       if(!j || !j.ok) break;
       const rows = j.rows || [];
       for(const x of rows){ applyLive(x.nm, x); if(x.ts > lastSync) lastSync = x.ts; }
@@ -1210,12 +1222,23 @@ function setHeadOffset(){
 addEventListener("resize", setHeadOffset);
 const PLATS = [
   {id:"psn", label:"PlayStation", live:true},
+  {id:"twitch", label:"Twitch", live:true},
   {id:"steam", label:"Steam", live:false},
   {id:"xbox", label:"Xbox", live:false},
-  {id:"discord", label:"Discord", live:false},
-  {id:"twitch", label:"Twitch", live:false}
+  {id:"discord", label:"Discord", live:false}
 ];
 let platform = "psn";
+function platCheckUrl(name){
+  return "/api/check?platform=" + encodeURIComponent(platform) + "&onlineId=" + encodeURIComponent(name);
+}
+function twitchOk(n){ return n.length>=4 && n.length<=25 && !n.includes("-") && /^[a-z][a-z_]*$/.test(n); }
+function viewOf(r){
+  if(platform!=="twitch") return r;
+  const t = twitchStore[r.n];
+  if(!t) return Object.assign({}, r, {a:2, v:0, w:0, d:null, ck:0});
+  const d = Math.max(0, Math.floor((Date.now()/1000 - t.ts)/86400));
+  return Object.assign({}, r, {a:t.a, v:1, w:t.w, d, ck:t.ck||1});
+}
 function buildPlats(){
   const el = $("plats"); if(!el) return;
   el.innerHTML = PLATS.map(p =>
@@ -1223,8 +1246,14 @@ function buildPlats(){
   ).join("");
   [...el.children].forEach(b => b.onclick = () => {
     const p = PLATS.find(x => x.id === b.dataset.p);
-    if(!p.live){ toast(p.label + " isn’t wired yet — PlayStation only for now"); return; }
-    platform = p.id; buildPlats();
+    if(!p.live){ toast(p.label + " isn’t wired yet"); return; }
+    if(p.id===platform) return;
+    platform = p.id;
+    const box = $("search");
+    if(box) box.placeholder = platform==="twitch" ? "Search Twitch names…  ( / )" : "Search PlayStation IDs…  ( / )";
+    state.shown = PAGE;
+    buildPlats(); render();
+    if(LIVE && +refreshMs>0) syncNow();
   });
 }
 rehydrateLive(); buildPlats(); buildChips(); render(); setHeadOffset(); setTimeout(setHeadOffset, 300);

@@ -19,6 +19,9 @@ import { connect } from "cloudflare:sockets";
 const SONY = "https://accounts.api.playstation.com/api/v1/accounts/onlineIds";
 const SONY_HOST = "accounts.api.playstation.com";
 const VALID = /^[a-z][a-z0-9_-]{2,15}$/;
+const TWITCH_GQL = "https://gql.twitch.tv/gql";
+const TWITCH_CID = "kimne78kx3ncx6brgo4mv6wki5h1ko";
+const TWITCH_VALID = /^[a-z][a-z0-9_]{3,24}$/; // 4–25, letter first, no hyphen
 const SITE = { answeredTotal: __ANSWERED_TOTAL__, builtAt: __BUILT_AT__ };
 const PROXIES = __PROXIES__; // CONNECT canary list
 const FWD_PROXIES = __FWD_PROXIES__; // HTTP forward proxies (do Sony TLS for us)
@@ -213,6 +216,59 @@ async function checkViaProxy(proxyUrl, name) {
   }
 }
 
+/* ---------------- Twitch (GQL, no Sony, works from CF) ---------------- */
+async function checkTwitchGql(name) {
+  const r = await fetch(TWITCH_GQL, {
+    method: "POST",
+    headers: { "Client-ID": TWITCH_CID, "content-type": "application/json" },
+    body: JSON.stringify({
+      query: "query($login:String!){user(login:$login){id login}}",
+      variables: { login: name },
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!r.ok) return null;
+  const j = await r.json();
+  if (!j || !j.data || !("user" in j.data)) return null;
+  return j.data.user ? VERDICTS.taken : VERDICTS.available;
+}
+
+async function apiCheckTwitch(request, env, ctx) {
+  const url = new URL(request.url);
+  const dbg = url.searchParams.has("raw");
+  const name = (url.searchParams.get("onlineId") || "")
+    .trim().toLowerCase().replace(/^@+/, "").trim();
+  if (!TWITCH_VALID.test(name))
+    return json(400, { ok: 0, error: "invalid_format",
+      hint: "Twitch: 4–25 chars, starts with a letter, letters/numbers/_ only" });
+
+  const kv = env && env.PSN_CACHE;
+  if (kv) {
+    const c = await kv.get("twitch:chk:" + name, "json").catch(() => null);
+    if (c && c.ts > Date.now() / 1000 - KV_TTL)
+      return json(200, { ok: 1, name, a: c.a, why: c.why, ts: c.ts,
+                         n: c.n || 1, cached: true, platform: "twitch" });
+  }
+  if (limited(request.headers.get("cf-connecting-ip") || "anon"))
+    return json(429, { ok: 0, error: "cooldown", retry_after: 60 });
+
+  let verdict = null;
+  try { verdict = await checkTwitchGql(name); }
+  catch (e) { verdict = null; }
+  if (!verdict)
+    return json(502, { ok: 0, error: "twitch_unreachable",
+                       hint: "Twitch GQL did not return a verdict" });
+
+  const ts = Math.floor(Date.now() / 1000);
+  if (kv)
+    ctx.waitUntil(kv.put("twitch:chk:" + name,
+      JSON.stringify({ a: verdict.a, why: verdict.why, ts, n: 1 }),
+      { expirationTtl: KV_TTL }).catch(() => {}));
+  return json(200, { ok: 1, name, a: verdict.a, why: verdict.why, ts, n: 1,
+                     cached: false, platform: "twitch",
+                     ...(dbg ? { via: "gql" } : {}) });
+}
+
 /* ---------------- /api/check ---------------- */
 async function apiCheck(request, env, ctx) {
   const url = new URL(request.url);
@@ -300,18 +356,20 @@ async function apiCheck(request, env, ctx) {
 /* ---------------- /api/updates (KV-backed) ---------------- */
 async function apiUpdates(url, env) {
   const since = +(url.searchParams.get("since") || 0) || 0;
+  const plat = (url.searchParams.get("platform") || "psn").toLowerCase();
   const now = Math.floor(Date.now() / 1000);
   const kv = env && env.PSN_CACHE;
   if (!kv) return json(200, { ok: 1, rows: [], more: false, now });
 
-  const list = await kv.list({ prefix: "chk:", limit: 1000 }).catch(() => null);
+  const prefix = plat === "twitch" ? "twitch:chk:" : "chk:";
+  const list = await kv.list({ prefix, limit: 1000 }).catch(() => null);
   if (!list || !list.keys.length) return json(200, { ok: 1, rows: [], more: false, now });
 
   const rows = [];
   for (const k of list.keys) {
     const v = await kv.get(k.name, "json").catch(() => null);
     if (!v || !(v.ts > since)) continue;
-    const nm = k.name.slice(4);
+    const nm = k.name.slice(prefix.length);
     if (/\d/.test(nm)) continue;              // catalogue is letters / _ / - only
     rows.push({ nm, a: v.a, why: v.why, ts: v.ts, n: v.n || 1 });
   }
@@ -326,7 +384,11 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
     try {
-      if (path === "/api/check") return await apiCheck(request, env, ctx);
+      if (path === "/api/check") {
+        const plat = (url.searchParams.get("platform") || "psn").toLowerCase();
+        if (plat === "twitch") return await apiCheckTwitch(request, env, ctx);
+        return await apiCheck(request, env, ctx);
+      }
       if (path === "/api/updates") return await apiUpdates(url, env);
       if (path === "/api/stats")
         return json(200, { ok: 1, answered_total: SITE.answeredTotal,
