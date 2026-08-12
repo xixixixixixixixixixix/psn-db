@@ -1,6 +1,6 @@
 # Hosting the PSN DB — free lanes
 
-## ✅ DEPLOYED: https://psn-ids-db.pages.dev (Lane A)
+## ✅ DEPLOYED: https://aliashq.pages.dev (Lane A)
 
 Live now, deployed via wrangler with the token in `deploy/.cf.env`. Redeploy
 fresh data anytime:

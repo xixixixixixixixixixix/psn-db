@@ -64,7 +64,7 @@ jobs:
       - name: Deploy to Cloudflare Pages
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-        run: npx --yes wrangler@3 pages deploy deploy/site --project-name psn-ids-db --branch main
+        run: npx --yes wrangler@3 pages deploy deploy/site --project-name aliashq --branch main
 
       - name: Commit fresh scan data
         run: |

@@ -166,7 +166,7 @@ See `deploy/HOSTING.md` — packaged lanes: **A** Cloudflare Pages drag-and-drop
 
 ## v6 — mirror live-verify + self-refreshing pipeline (2026-08-12)
 
-- Public mirror: https://psn-ids-db.pages.dev (Cloudflare Pages, deployed via wrangler@3 with token in deploy/.cf.env)
+- Public mirror: **https://aliashq.pages.dev** (Cloudflare Pages). Old URL https://psn-ids-db.pages.dev still exists but is no longer the deploy target.
 - Opening ANY unverified name auto-fires a live Sony check (deploy/_worker.js /api/check). Verdicts persist to Cloudflare KV (namespace PSN_CACHE), stream to every open session via /api/updates, and are folded into the master pool by deploy/pull_kv.py on each refresh run.
 - Egress reality: Sony 403s Cloudflare-tagged fetch ~90% of the time; breakthroughs happen on warm egress IPs and are now captured globally via KV. A raw-socket CONNECT+startTls proxy fallback exists in _worker.js but is defeated by workerd cert validation (SNI = proxy IP, kj/compat/tls.c++ "IP address mismatch") until Cloudflare exposes hostname control on startTls — left in as a 1-attempt canary.
 - Self-refresh: deploy/cron-deploy.yml (GitHub Actions, every 30 min) = pull KV verdicts → 7-min proxy-fleet sweep → build.py → pack.sh → wrangler pages deploy. Needs repo secrets CF_API_TOKEN / CF_ACCOUNT_ID / CF_KV_NAMESPACE_ID; repo should be public (free unlimited minutes).
