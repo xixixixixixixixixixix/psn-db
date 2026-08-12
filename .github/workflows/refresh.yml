@@ -1,0 +1,70 @@
+# GitHub Actions: the public mirror's refresh loop — runs every 30 min, no
+# human involved: pull mirror click-verdicts from KV -> sweep the queue through
+# the proxy fleet -> rebuild index.html -> redeploy to Cloudflare Pages.
+#
+# Setup (I do all of this via API once you paste a GitHub token):
+#   repo secret  CF_API_TOKEN       = the Cloudflare token (deploy/.cf.env)
+#   repo secret  CF_ACCOUNT_ID      = 160890952a550977a5ae5ac1248dbdfe
+#   repo secret  CF_KV_NAMESPACE_ID = filled after the KV namespace exists
+#   repo visibility: PUBLIC (nothing sensitive — creds live in secrets, proxy
+#   lists are public sources). Public repos get unlimited Action minutes; a
+#   private repo burns your free 2,000 in ~4 days at this cadence.
+name: psn-refresh
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: psn-refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+  CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+  CF_KV_NAMESPACE_ID: ${{ secrets.CF_KV_NAMESPACE_ID }}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Fold mirror click-verdicts into the verified pool
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: python3 deploy/pull_kv.py
+
+      - name: Sweep with proxy fleet (7 min)
+        env:
+          PSN_INTERVAL: "0.35"
+          PSN_WORKERS: "200"
+        run: timeout 420 python3 -u server.py || true
+
+      - name: Rebuild static site + worker bundle
+        run: python3 build.py && bash deploy/pack.sh
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: npx --yes wrangler@3 pages deploy deploy/site --project-name psn-ids-db --branch main
+
+      - name: Commit fresh scan data
+        run: |
+          git config user.name "psn-refresh-bot"
+          git config user.email "psn-refresh-bot@users.noreply.github.com"
+          git add data/verified_live.json data/proxies.txt
+          git diff --cached --quiet || git commit -m "refresh: $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push
