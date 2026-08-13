@@ -2,7 +2,7 @@
 //
 //   GET /api/check?onlineId=X   live Sony verdict:
 //       1. KV verdict cache (24h) if PSN_CACHE is bound
-//       2. classwide short-circuit for 3-char IDs (empirically reserved en bloc)
+//       2. classwide short-circuit for 3- and 4-char IDs (Sony 406 en bloc)
 //       3. direct Sony attempt — Akamai 403s Cloudflare-tainted egress, so this
 //          is mostly a warmed-IP dice roll
 //       4. fallback: CONNECT through the bundled residential proxy fleet over a
@@ -290,9 +290,9 @@ async function apiCheck(request, env, ctx) {
                          n: c.n || 1, cached: true });
   }
 
-  // classwide, empirically verified: every 3-char ID is reserved as a class
-  if (name.length === 3)
-    return json(200, { ok: 1, name, a: 1, why: "reserved3",
+  // classwide: every 3- and 4-char ID returns 406 on Sony's signup endpoint
+  if (name.length <= 4)
+    return json(200, { ok: 1, name, a: 1, why: name.length === 3 ? "reserved3" : "reserved",
                        ts: Math.floor(Date.now() / 1000), n: 1,
                        cached: true, classwide: true });
 
@@ -373,6 +373,7 @@ async function apiUpdates(url, env) {
     if (!v || !(v.ts > since)) continue;
     const nm = k.name.slice(prefix.length);
     if (/\d/.test(nm)) continue;              // catalogue is letters / _ / - only
+    if (plat !== "twitch" && nm.length < 5) continue; // 3/4-char class-reserved
     rows.push({ nm, a: v.a, why: v.why, ts: v.ts, n: v.n || 1 });
   }
   rows.sort((a, b) => a.ts - b.ts);

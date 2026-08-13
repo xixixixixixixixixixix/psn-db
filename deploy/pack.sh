@@ -27,11 +27,11 @@ for f in glob.glob("data/verified*.json"):
                 merged[k] = v
     except Exception:
         pass
-ans = sum(1 for v in merged.values() if v.get("a") in (0, 1) and v.get("why"))
-# plus the classwide 3-char reservation (data/class3.json), unless individually recorded
-AL = string.ascii_lowercase + string.digits
-ans += sum(1 for a in string.ascii_lowercase for b in AL for c in AL
-           if (a + b + c) not in merged)
+ans = sum(1 for k, v in merged.items()
+          if isinstance(v, dict) and v.get("a") in (0, 1) and v.get("why")
+          and len(k) >= 5)
+# classwide 3-char + 4-char reservation (Sony 406)
+ans += 26 ** 3 + 26 ** 4
 tpl = open("deploy/_worker.js").read()
 tpl = tpl.replace("__ANSWERED_TOTAL__", str(ans))
 tpl = tpl.replace("__BUILT_AT__", str(int(time.time())))
@@ -49,7 +49,7 @@ tpl = tpl.replace("__FWD_PROXIES__", json.dumps(fwd[:12]))
 assert "__ANSWERED_TOTAL__" not in tpl and "__BUILT_AT__" not in tpl \
     and "__PROXIES__" not in tpl and "__FWD_PROXIES__" not in tpl
 open("deploy/site/_worker.js", "w").write(tpl)
-print("mirror stats baked:", f"{ans:,}", "verified on record (incl. 3-char class);",
+print("mirror stats baked:", f"{ans:,}", "verified on record (incl. 3/4-char class);",
       f"{len(px[:14])} connect-proxies,", f"{len(fwd[:12])} forward-proxies bundled")
 EOF
 

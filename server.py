@@ -239,10 +239,10 @@ def load_nodes():
     return nodes
 
 
-# ---------------------------------------------------------------- systematic scanner (aaaa, aaab, … then 5-char, up to 16)
-# 3-char is class-reserved and skipped. Letter-only ids are generated in order.
+# ---------------------------------------------------------------- systematic scanner (aaaaa, aaaab, … up to 16)
+# 3-char and 4-char are class-reserved (Sony 406) and skipped.
 # Catalogue names with digits/_/- of a finished length are drained before bumping.
-_cursor = "aaaa"
+_cursor = "aaaaa"
 _cursor_lock = threading.Lock()
 _pending_extras = []
 _extras_by_len = {}
@@ -250,7 +250,7 @@ _last_cursor_save = 0.0
 
 
 def succ_letter(s):
-    """Next a-z id: aaaa → aaab → … → aaaz → aaba → … → zzzz → aaaaa."""
+    """Next a-z id: aaaaa → aaaab → … → zzzzz → aaaaaa."""
     chars = list(s)
     i = len(chars) - 1
     while i >= 0:
@@ -272,7 +272,8 @@ def load_cursor():
     except OSError:
         return
     if re.fullmatch(r"[a-z]{4,16}", s):
-        _cursor = s
+        # 4-letter space is class-reserved — jump the leftover aaaa–zzzz walk to 5-char
+        _cursor = "aaaaa" if len(s) < 5 else s
 
 
 def save_cursor(force=False):
@@ -292,11 +293,11 @@ def save_cursor(force=False):
 def load_extras():
     """Non-letter catalogue names, grouped by length, already (len, a-z) sorted."""
     global _extras_by_len
-    by = {n: [] for n in range(4, 17)}
+    by = {n: [] for n in range(5, 17)}
     try:
         for line in open(SCAN_QUEUE):
             n = line.strip().lower()
-            if (4 <= len(n) <= 16 and not n.isalpha() and VALID.match(n)
+            if (5 <= len(n) <= 16 and not n.isalpha() and VALID.match(n)
                     and not any(c.isdigit() for c in n)):
                 by[len(n)].append(n)
     except OSError:
@@ -487,12 +488,12 @@ class Handler(BaseHTTPRequestHandler):
         if not VALID.match(name):
             return self._json(400, {"ok": 0, "error": "invalid_format",
                                     "hint": "3-16 chars, starts with a letter, letters/numbers/_/- only"})
-        if len(name) == 3:
+        if len(name) <= 4:
             c3 = class3()
-            if c3:
-                return self._json(200, {"ok": 1, "name": name, "a": 1, "why": "reserved3",
-                                        "ts": c3.get("ts", 0), "n": 1, "cached": True,
-                                        "classwide": True})
+            return self._json(200, {"ok": 1, "name": name, "a": 1,
+                                    "why": "reserved3" if len(name) == 3 else "reserved",
+                                    "ts": (c3 or {}).get("ts", int(time.time())), "n": 1,
+                                    "cached": True, "classwide": True})
         rec = _cache.get(name)
         if answered(rec):
             return self._json(200, {"ok": 1, "name": name, "a": rec["a"], "why": rec["why"],

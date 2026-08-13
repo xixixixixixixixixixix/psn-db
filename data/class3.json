@@ -1,1 +1,1 @@
-{"evidence": "312/312 random 3-char IDs returned HTTP 406 on Sony accounts endpoint", "ts": 1786485647}
+{"evidence": "every 3-char and 4-char onlineId sampled 2026-08-13 returned HTTP 406; 5-char still 201/400", "ts": 1786569600, "min_len_issued": 5}
