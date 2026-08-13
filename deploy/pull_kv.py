@@ -1,50 +1,62 @@
 #!/usr/bin/env python3
-"""Pull mirror live-check verdicts from Cloudflare KV into data/verified_live.json.
+"""Pull PSN click-check verdicts from Cloudflare KV into data/verified_live.json.
 
-Someone clicks an unknown name on psn-ids-db.pages.dev -> _worker.js checks Sony
--> verdict lands in the PSN_CACHE KV namespace. This job (run by the GitHub
-Action before each rebuild) folds those into the master verified pool, so the
-clicked names appear as verified rows / taken-registry entries on the next deploy.
+Twitch KV is owned by twitch-refresh.yml (it already commits verified_twitch.json).
+Fetching 7k+ twitch:chk: values one-by-one was hanging psn-refresh for the full
+14-minute job timeout, so the PSN scan never started.
 
-Env: CF_ACCOUNT_ID, CF_API_TOKEN, CF_KV_NAMESPACE_ID (action skips when unset).
+Env: CF_ACCOUNT_ID, CF_API_TOKEN, CF_KV_NAMESPACE_ID (skips when unset).
 """
 import json
 import os
 import sys
+import time
+import urllib.error
+import urllib.parse
 import urllib.request
 
 AID = os.environ.get("CF_ACCOUNT_ID")
 TOK = os.environ.get("CF_API_TOKEN")
 NS = os.environ.get("CF_KV_NAMESPACE_ID")
 if not (AID and TOK and NS):
-    print("pull_kv: CF_* env not set — skipping (KV not configured)")
+    print("pull_kv: CF_* env not set — skipping (KV not configured)", flush=True)
     sys.exit(0)
 
 BASE = f"https://api.cloudflare.com/client/v4/accounts/{AID}/storage/kv/namespaces/{NS}"
 HERE = os.path.dirname(os.path.abspath(__file__))
 POOL = os.path.join(HERE, "..", "data", "verified_live.json")
+DEADLINE = time.time() + int(os.environ.get("PULL_KV_SECS", "80"))
 
 
 def cget(path, raw=False):
     req = urllib.request.Request(BASE + path,
                                  headers={"Authorization": f"Bearer {TOK}"})
-    with urllib.request.urlopen(req, timeout=25) as r:
+    with urllib.request.urlopen(req, timeout=15) as r:
         body = r.read()
     return body if raw else json.loads(body)
 
 
-def main():
+def list_keys(prefix):
     keys, cursor = [], None
-    while True:
-        q = "/keys?prefix=chk:&limit=1000" + (f"&cursor={cursor}" if cursor else "")
+    while time.time() < DEADLINE:
+        q = f"/keys?prefix={urllib.parse.quote(prefix)}&limit=1000"
+        if cursor:
+            q += f"&cursor={cursor}"
         d = cget(q)
         if not d.get("success"):
-            print("pull_kv: list failed:", d.get("errors"))
-            sys.exit(1)
-        keys += [k["name"] for k in d["result"]]
-        cursor = (d.get("result_info") or {}).get("cursor")
-        if not cursor or len(d["result"]) < 1000:
+            print("pull_kv: list failed:", d.get("errors"), flush=True)
             break
+        keys += [k["name"] for k in d.get("result") or []]
+        cursor = (d.get("result_info") or {}).get("cursor")
+        if not cursor or len(d.get("result") or []) < 1000:
+            break
+    return keys
+
+
+def main():
+    print("pull_kv: listing chk: …", flush=True)
+    keys = list_keys("chk:")
+    print(f"pull_kv: {len(keys)} PSN keys", flush=True)
 
     try:
         pool = json.load(open(POOL))
@@ -52,8 +64,13 @@ def main():
         pool = {}
 
     new = 0
-    for k in keys:
+    for i, k in enumerate(keys, 1):
+        if time.time() >= DEADLINE:
+            print(f"pull_kv: time box hit after {i-1}/{len(keys)}", flush=True)
+            break
         name = k[4:]
+        if len(name) < 5:          # 3/4-char are class-reserved
+            continue
         try:
             v = json.loads(cget("/values/" + urllib.parse.quote(k), raw=True))
         except Exception:
@@ -70,45 +87,13 @@ def main():
     with open(tmp, "w") as f:
         json.dump(pool, f)
     os.replace(tmp, POOL)
-    print(f"pull_kv: {len(keys)} mirror verdicts read, {new} merged into verified pool")
-
-    # Twitch click-verdicts (same KV, different prefix)
-    tkeys, cursor = [], None
-    while True:
-        q = "/keys?prefix=twitch:chk:&limit=1000" + (f"&cursor={cursor}" if cursor else "")
-        d = cget(q)
-        if not d.get("success"):
-            break
-        tkeys += [k["name"] for k in d["result"]]
-        cursor = (d.get("result_info") or {}).get("cursor")
-        if not cursor or len(d["result"]) < 1000:
-            break
-    tpool_path = os.path.join(HERE, "..", "data", "verified_twitch.json")
-    try:
-        tpool = json.load(open(tpool_path))
-    except (OSError, ValueError):
-        tpool = {}
-    tnew = 0
-    for k in tkeys:
-        name = k.split(":", 2)[-1]
-        try:
-            v = json.loads(cget("/values/" + urllib.parse.quote(k), raw=True))
-        except Exception:
-            continue
-        if not isinstance(v, dict) or "a" not in v:
-            continue
-        old = tpool.get(name)
-        if old is None or v.get("ts", 0) > old.get("ts", 0):
-            tpool[name] = {"a": v["a"], "why": v.get("why", "taken"),
-                           "ts": int(v.get("ts", 0)), "n": int(v.get("n", 1))}
-            tnew += 1
-    tmp = tpool_path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(tpool, f)
-    os.replace(tmp, tpool_path)
-    print(f"pull_kv: {len(tkeys)} twitch verdicts, {tnew} merged")
+    print(f"pull_kv: {len(keys)} PSN verdicts read, {new} merged "
+          f"(twitch KV skipped — twitch-refresh owns that file)", flush=True)
 
 
 if __name__ == "__main__":
-    import urllib.parse  # noqa: E402  (kept low-import for Action boot speed)
-    main()
+    try:
+        main()
+    except Exception as e:
+        print("pull_kv: abort", type(e).__name__, e, flush=True)
+        sys.exit(0)   # never block the scan

@@ -30,7 +30,7 @@ env:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 14
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
 
@@ -45,7 +45,8 @@ jobs:
       - name: Fold mirror click-verdicts into the verified pool
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-        run: python3 deploy/pull_kv.py
+          PULL_KV_SECS: "60"
+        run: timeout 70 python3 -u deploy/pull_kv.py || true
 
       - name: Drain click-queue first
         env:
