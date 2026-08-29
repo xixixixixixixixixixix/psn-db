@@ -1,1 +1,1 @@
-bgpns
+bgsiz
